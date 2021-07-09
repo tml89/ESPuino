@@ -1,6 +1,8 @@
 # ESPuino - rfid-based musiccontroller based on ESP32 with I2S-DAC-support
 
-## NEWS
+## News
+This is the old master-branch which will not be maintained any longer. So please consider it deprecated. However, it will be kept as reference.
+## Forum
 * EN: I've set up a primarily German-speaking community with much documentation. Also an international corner for non-German-speakers is available at https://forum.espuino.de. Github-Login can be used there but it's not mandatory.
 * DE: Ich habe ein primär deutschsprachiges Forum aufgesetzt, welches ich mit reichlich Doku versehen habe. Würde mich freuen, euch dort zu sehen: https://forum.espuino.de. Ihr könnt euch dort mit eurem Github-Login einloggen, jedoch auch "normal" anmelden. Dokumenation findet ihr insbesondere hier: https://forum.espuino.de/c/dokumentation/anleitungen/10
 ## Build status
