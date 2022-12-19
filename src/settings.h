@@ -23,21 +23,21 @@
     more to come...
     */
     #ifndef HAL             // Will be set by platformio.ini. If using Arduini-IDE you have to set HAL according your needs!
-        #define HAL 1       // HAL 1 = LoLin32, 2 = ESP32-A1S-AudioKit, 3 = Lolin D32, 4 = Lolin D32 pro; ... 99 = custom
+        #define HAL 4       // HAL 1 = LoLin32, 2 = ESP32-A1S-AudioKit, 3 = Lolin D32, 4 = Lolin D32 pro; ... 99 = custom
     #endif
 
 
     //########################## MODULES #################################
-    //#define PORT_EXPANDER_ENABLE          // When enabled, buttons can be connected via port-expander PCA9555 (https://forum.espuino.de/t/einsatz-des-port-expanders-pca9555/306)
+    #define PORT_EXPANDER_ENABLE          // When enabled, buttons can be connected via port-expander PCA9555 (https://forum.espuino.de/t/einsatz-des-port-expanders-pca9555/306)
     //#define I2S_COMM_FMT_LSB_ENABLE       // Enables FMT instead of MSB for I2S-communication-format. Used e.g. by PT2811. Don't enable for MAX98357a, AC101 or PCM5102A)
     #define MDNS_ENABLE                     // When enabled, you don't have to handle with ESPuino's IP-address. If hostname is set to "ESPuino", you can reach it via ESPuino.local
-    //#define MQTT_ENABLE                     // Make sure to configure mqtt-server and (optionally) username+pwd
-    #define FTP_ENABLE                      // Enables FTP-server; DON'T FORGET TO ACTIVATE AFTER BOOT BY PRESSING PAUSE + NEXT-BUTTONS (IN PARALLEL)!
+    #define MQTT_ENABLE                     // Make sure to configure mqtt-server and (optionally) username+pwd
+    //#define FTP_ENABLE                      // Enables FTP-server; DON'T FORGET TO ACTIVATE AFTER BOOT BY PRESSING PAUSE + NEXT-BUTTONS (IN PARALLEL)!
     #define NEOPIXEL_ENABLE                 // Don't forget configuration of NUM_LEDS if enabled
     //#define NEOPIXEL_REVERSE_ROTATION     // Some Neopixels are adressed/soldered counter-clockwise. This can be configured here.
     #define LANGUAGE DE                     // DE = deutsch; EN = english
     //#define STATIC_IP_ENABLE              // Enables static IP-configuration (change static ip-section accordingly)
-    #define HEADPHONE_ADJUST_ENABLE       // Used to adjust (lower) volume for optional headphone-pcb (refer maxVolumeSpeaker / maxVolumeHeadphone) and to enable stereo (if PLAY_MONO_SPEAKER is set)
+    //#define HEADPHONE_ADJUST_ENABLE       // Used to adjust (lower) volume for optional headphone-pcb (refer maxVolumeSpeaker / maxVolumeHeadphone) and to enable stereo (if PLAY_MONO_SPEAKER is set)
     #define PLAY_MONO_SPEAKER               // If only one speaker is used enabling mono should make sense. Please note: headphones is always stereo (if HEADPHONE_ADJUST_ENABLE is active)
     #define SHUTDOWN_IF_SD_BOOT_FAILS       // Will put ESP to deepsleep if boot fails due to SD. Really recommend this if there's in battery-mode no other way to restart ESP! Interval adjustable via deepsleepTimeAfterBootFails.
     #define MEASURE_BATTERY_VOLTAGE         // Enables battery-measurement via GPIO (ADC) and voltage-divider
@@ -49,10 +49,10 @@
     #define BLUETOOTH_ENABLE                // If enabled and bluetooth-mode is active, you can stream to your ESPuino via bluetooth (a2dp-sink).
     //#define IR_CONTROL_ENABLE             // Enables remote control (https://forum.espuino.de/t/neues-feature-fernsteuerung-per-infrarot-fernbedienung/265)
     #define CACHED_PLAYLIST_ENABLE          // Enables playlist-caching (infos: https://forum.espuino.de/t/neues-feature-cached-playlist/515)
-    //#define PAUSE_WHEN_RFID_REMOVED       // Playback starts when card is applied and pauses automatically, when card is removed (https://forum.espuino.de/t/neues-feature-pausieren-wenn-rfid-karte-entfernt-wurde/541)
-    //#define DONT_ACCEPT_SAME_RFID_TWICE   // RFID-reader doesn't accept the same RFID-tag twice in a row (unless it's a modification-card or RFID-tag is unknown in NVS). Flag will be ignored silently if PAUSE_WHEN_RFID_REMOVED is active. (https://forum.espuino.de/t/neues-feature-dont-accept-same-rfid-twice/1247)
-    //#define SAVE_PLAYPOS_BEFORE_SHUTDOWN  // When playback is active and mode audiobook was selected, last play-position is saved automatically when shutdown is initiated
-    //#define SAVE_PLAYPOS_WHEN_RFID_CHANGE // When playback is active and mode audiobook was selected, last play-position is saved automatically for old playlist when new RFID-tag is applied
+    #define PAUSE_WHEN_RFID_REMOVED       // Playback starts when card is applied and pauses automatically, when card is removed (https://forum.espuino.de/t/neues-feature-pausieren-wenn-rfid-karte-entfernt-wurde/541)
+    #define DONT_ACCEPT_SAME_RFID_TWICE   // RFID-reader doesn't accept the same RFID-tag twice in a row (unless it's a modification-card or RFID-tag is unknown in NVS). Flag will be ignored silently if PAUSE_WHEN_RFID_REMOVED is active. (https://forum.espuino.de/t/neues-feature-dont-accept-same-rfid-twice/1247)
+    #define SAVE_PLAYPOS_BEFORE_SHUTDOWN  // When playback is active and mode audiobook was selected, last play-position is saved automatically when shutdown is initiated
+    #define SAVE_PLAYPOS_WHEN_RFID_CHANGE // When playback is active and mode audiobook was selected, last play-position is saved automatically for old playlist when new RFID-tag is applied
 
 
     //################## select SD card mode #############################
@@ -61,16 +61,16 @@
 
 
     //################## select RFID reader ##############################
-    #define RFID_READER_TYPE_MFRC522_SPI    // use MFRC522 via SPI
+    //define RFID_READER_TYPE_MFRC522_SPI    // use MFRC522 via SPI
     //#define RFID_READER_TYPE_MFRC522_I2C  // use MFRC522 via I2C
-    //#define RFID_READER_TYPE_PN5180       // use PN5180 via SPI
+    #define RFID_READER_TYPE_PN5180       // use PN5180 via SPI
 
     #ifdef RFID_READER_TYPE_MFRC522_I2C
         #define MFRC522_ADDR 0x28           // default I2C-address of MFRC522
     #endif
 
     #ifdef RFID_READER_TYPE_PN5180
-        //#define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active. Only ISO-14443-tags are supported for wakeup!
+        #define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active. Only ISO-14443-tags are supported for wakeup!
     #endif
 
     #if defined(RFID_READER_TYPE_MFRC522_I2C) || defined(RFID_READER_TYPE_MFRC522_SPI)
@@ -118,9 +118,9 @@
     #define BUTTON_4_SHORT    CMD_SEEK_BACKWARDS
     #define BUTTON_5_SHORT    CMD_SEEK_FORWARDS
 
-    #define BUTTON_0_LONG     CMD_LASTTRACK
-    #define BUTTON_1_LONG     CMD_FIRSTTRACK
-    #define BUTTON_2_LONG     CMD_PLAYPAUSE
+    #define BUTTON_0_LONG     CMD_SEEK_FORWARDS
+    #define BUTTON_1_LONG     CMD_SEEK_BACKWARDS
+    #define BUTTON_2_LONG     CMD_SLEEPMODE
     #define BUTTON_3_LONG     CMD_SLEEPMODE
     #define BUTTON_4_LONG     CMD_NOTHING
     #define BUTTON_5_LONG     CMD_NOTHING
@@ -171,10 +171,10 @@
     // Default user/password is esp32/esp32 but can be changed via webgui
 
     // ESPuino will create a WiFi if joing existing WiFi was not possible. Name can be configured here.
-    constexpr const char accessPointNetworkSSID[] PROGMEM = "ESPuino";     // Access-point's SSID
+    constexpr const char accessPointNetworkSSID[] PROGMEM = "MusikBox";     // Access-point's SSID
     
 	// Bluetooth
-	constexpr const char nameBluetoothSinkDevice[] PROGMEM = "ESPuino";        // Name of your ESPuino as Bluetooth-device
+	constexpr const char nameBluetoothSinkDevice[] PROGMEM = "MusikBox";        // Name of your ESPuino as Bluetooth-device
     constexpr const char nameBluetoothSourceDevice[] PROGMEM = "My POGS Wireless Headphone"; // Name of Bluetooth-device to connect to (BT-Headset name) (https://forum.espuino.de/t/neues-feature-bluetooth-kopfhoerer/1293/)
 
     // Where to store the backup-file for NVS-records
@@ -184,9 +184,9 @@
     //#################### Settings for optional Modules##############################
     // (optinal) Neopixel
     #ifdef NEOPIXEL_ENABLE
-        #define NUM_LEDS                    24          // number of LEDs
+        #define NUM_LEDS                    1          // number of LEDs
         #define CHIPSET                     WS2812B     // type of Neopixel
-        #define COLOR_ORDER                 GRB
+        #define COLOR_ORDER                 RGB
     #endif
 
     #if defined(MEASURE_BATTERY_VOLTAGE) || defined(MEASURE_BATTERY_MAX17055)

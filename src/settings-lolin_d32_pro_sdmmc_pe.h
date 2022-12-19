@@ -44,7 +44,7 @@
     #ifdef RFID_READER_TYPE_PN5180
         #define RFID_BUSY                   33          // PN5180 BUSY PIN
         #define RFID_RST                    22          // PN5180 RESET PIN
-        #define RFID_IRQ                    99          // Needs to be adjusted to 106 if LPCD-mode is desired!
+        #define RFID_IRQ                    106         // Needs to be adjusted to 106 if LPCD-mode is desired!
     #endif
 
     // I2S (DAC)
@@ -54,7 +54,7 @@
 
     // Rotary encoder
     #ifdef USEROTARY_ENABLE
-        //#define REVERSE_ROTARY                        // To reverse encoder's direction; switching CLK / DT in hardware does the same
+        #define REVERSE_ROTARY                        // To reverse encoder's direction; switching CLK / DT in hardware does the same
         #define ROTARYENCODER_CLK           34          // rotary encoder's CLK
         #define ROTARYENCODER_DT            39          // 39 = 'VN'; rotary encoder's DT
     #endif
@@ -88,9 +88,9 @@
     #define WAKEUP_BUTTON                   36          // Defines the button that is used to wake up ESPuino from deepsleep; set to 99 to disable
 
     // Power-control
-    #define POWER                           32          // GPIO used to drive transistor-circuit, that switches off peripheral devices while ESP32-deepsleep
+    #define POWER                           115          // GPIO used to drive transistor-circuit, that switches off peripheral devices while ESP32-deepsleep
     #ifdef POWER
-        //#define INVERT_POWER                          // If enabled, use inverted logic for POWER circuit, that means peripherals are turned off by writing HIGH
+        #define INVERT_POWER                          // If enabled, use inverted logic for POWER circuit, that means peripherals are turned off by writing HIGH
     #endif
 
     // (optional) Neopixel
@@ -106,7 +106,7 @@
     #ifdef MEASURE_BATTERY_VOLTAGE
         #define VOLTAGE_READ_PIN            35          // GPIO used to monitor battery-voltage. Don't change, it's built in
         constexpr float referenceVoltage = 3.30;        // Voltage between 3.3V and GND-pin at the develboard in battery-mode (disconnect USB!)
-        constexpr float offsetVoltage = 0.1;            // If voltage measured by ESP isn't 100% accurate, you can add an correction-value here
+        constexpr float offsetVoltage = 0.4;            // If voltage measured by ESP isn't 100% accurate, you can add an correction-value here
     #endif
 
     // (optional) For measuring battery-voltage a voltage-divider is already onboard. Connect a LiPo and use it!
