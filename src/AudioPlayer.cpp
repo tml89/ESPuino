@@ -315,6 +315,9 @@ void AudioPlayer_Task(void *parameter) {
 		audio->setTone(3, 0, 0);
 	}
 
+	// EmmaBox spezific
+	audio->setTone(0, 5, 6);
+
 	uint8_t currentVolume;
 	static BaseType_t trackQStatus;
 	static uint8_t trackCommand = NO_ACTION;
