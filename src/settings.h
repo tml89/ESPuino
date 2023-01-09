@@ -191,7 +191,7 @@
     #ifdef NEOPIXEL_ENABLE
         #define NUM_LEDS                    1          // number of LEDs
         #define CHIPSET                     WS2812B     // type of Neopixel
-        #define COLOR_ORDER                 RGB
+        #define COLOR_ORDER                 GRB
         #define PROGRESS_HUE_START          85          // Start and end hue of mulitple-LED progress indicator. Hue ranges from basically 0 - 255, but you can also set numbers outside this range to get the desired effect (e.g. 85-215 will go from green to purple via blue, 341-215 start and end at exactly the same color but go from green to purple via yellow and red)
         #define PROGRESS_HUE_END            -1
         //#define LED_OFFSET                0           // shifts the starting LED in the original direction of the neopixel ring
