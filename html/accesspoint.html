@@ -1,8 +1,11 @@
 <!DOCTYPE html>
 <html>
 	<head>
-		<title>WLAN-Einrichtung</title>
+		<title data-i18n="wifi.title"></title>
 		<meta charset="utf-8">
+        <script src="/js/i18next.min.js"></script>
+        <script src="/js/i18nextHttpBackend.min.js"></script>
+        <script src="/js/loc_i18next.min.js"></script>
 		<style>
 			input {
 				width: 90%;
@@ -41,22 +44,38 @@
 			.rebootmsg {
 				display: none;
 			}
+			.fas{
+				padding-right: 0.25em;
+			}
 		</style>
 	</head>
 	<body>
 		<form id="settings" action="/init" class="box" method="POST">
-			<h1>WLAN-Einrichtung</h1>
-			<label for="ssid">SSID:</label><br>
+			<h1 data-i18n="wifi.title">WiFi-configuration</h1>
+			<label for="ssid" data-i18n="[prepend]wifi.ssid.title">:</label><br>
 			<input type="text" id="ssid" name="ssid" placeholder="SSID" required><br>
-			<label for="pwd">Passwort:</label><br>
+			<label for="pwd" data-i18n="[prepend]wifi.password.title">:</label><br>
 			<input type="password" id="pwd" name="pwd" autocomplete="off" required><br>
-			<label for="hostname">ESPuino-Name (Hostname):</label><br>
+			<label for="hostname" data-i18n="[prepend]wifi.hostname.title">:</label><br>
 			<input type="text" id="hostname" name="hostname" placeholder="espuino" required><br><br>
-			<input class="btn" type="submit" id="save-button" value="Save">
+			<button type="submit" id="save-button" data-i18n="submit"></button>
 		</form>
 		<form action="/restart" class="box">
-			<h1>Fertig?</h1>
-			<input class="btn" type="submit" id="restart-button" value="Reboot">
+			<h1 data-i18n="wifi.restartPrompt">Ready to go?</h1>
+			<button type="submit" id="restart-button" data-i18n="restart" value="Reboot"></button>
 		</form>
+        
+        <script>
+        i18next.use(i18nextHttpBackend).init({
+            backend: {
+                loadPath: "/locales/{{lng}}.json"
+            },
+            debug: true,
+            fallbackLng: 'en',
+        }, (err, t) => {
+            localize = locI18next.init(i18next);
+            localize('body');
+        });
+        </script>
 	</body>
 </html>

@@ -27,24 +27,17 @@
 #include "Rfid.h"
 #include "HallEffectSensor.h"
 
-#if (LANGUAGE == DE)
-	#include "HTMLaccesspoint_DE.h"
-	#include "HTMLmanagement_DE.h"
-#endif
-
-#if (LANGUAGE == EN)
-	#include "HTMLaccesspoint_EN.h"
-	#include "HTMLmanagement_EN.h"
-#endif
-
+#include "HTMLaccesspoint.h"
+#include "HTMLmanagement.h"
+#include "HTMLbinary.h"
 
 typedef struct {
 	char nvsKey[13];
 	char nvsEntry[275];
 } nvs_t;
 
-const char mqttTab[] PROGMEM = "<a class=\"nav-item nav-link\" id=\"nav-mqtt-tab\" data-toggle=\"tab\" href=\"#nav-mqtt\" role=\"tab\" aria-controls=\"nav-mqtt\" aria-selected=\"false\"><i class=\"fas fa-network-wired\"></i> MQTT</a>";
-const char ftpTab[] PROGMEM = "<a class=\"nav-item nav-link\" id=\"nav-ftp-tab\" data-toggle=\"tab\" href=\"#nav-ftp\" role=\"tab\" aria-controls=\"nav-ftp\" aria-selected=\"false\"><i class=\"fas fa-folder\"></i> FTP</a>";
+const char mqttTab[] PROGMEM = "<a class=\"nav-item nav-link\" id=\"nav-mqtt-tab\" data-toggle=\"tab\" href=\"#nav-mqtt\" role=\"tab\" aria-controls=\"nav-mqtt\" aria-selected=\"false\"><i class=\"fas fa-network-wired\"></i><span data-i18n=\"nav.mqtt\"></span></a>";
+const char ftpTab[] PROGMEM = "<a class=\"nav-item nav-link\" id=\"nav-ftp-tab\" data-toggle=\"tab\" href=\"#nav-ftp\" role=\"tab\" aria-controls=\"nav-ftp\" aria-selected=\"false\"><i class=\"fas fa-folder\"></i><span data-i18n=\"nav.ftp\"></span></a>";
 
 AsyncWebServer wServer(80);
 AsyncWebSocket ws("/ws");
@@ -87,10 +80,40 @@ struct SpiRamAllocator {
 };
 using SpiRamJsonDocument = BasicJsonDocument<SpiRamAllocator>;
 
+static void serveProgmemFiles(const String& uri, const String& contentType, const uint8_t *content, size_t len) {
+	wServer.on(uri.c_str(), HTTP_GET, [contentType, content, len](AsyncWebServerRequest *request){
+		AsyncWebServerResponse *response;
+
+		// const bool etag = request->hasHeader("if-None-Match") && request->getHeader("if-None-Match")->value().equals(gitRevShort);
+		const bool etag = false;
+		if(etag)
+			response = request->beginResponse(304);
+		else{
+			response = request->beginResponse_P(200, contentType, content, len);
+			response->addHeader("Content-Encoding", "gzip");
+		}
+		// response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
+		// response->addHeader("ETag", gitRevShort);		// use git revision as digest
+		request->send(response);
+	});
+}
+
 void Web_Init(void) {
 	wServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-		request->send_P(200, "text/html", accesspoint_HTML);
+		AsyncWebServerResponse *response;
+
+		// const bool etag = request->hasHeader("if-None-Match") && request->getHeader("if-None-Match")->value().equals(gitRevShort);
+		const bool etag = false;
+		if(etag)
+			response = request->beginResponse(304);
+		else
+			response = request->beginResponse_P(200, "text/html", accesspoint_HTML);
+		// response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
+		// response->addHeader("ETag", gitRevShort);		// use git revision as digest
+		request->send(response);
 	});
+
+	WWWData::registerRoutes(serveProgmemFiles);
 
 	wServer.on("/init", HTTP_POST, [](AsyncWebServerRequest *request) {
 		if (request->hasParam("ssid", true) && request->hasParam("pwd", true) && request->hasParam("hostname", true)) {
@@ -148,14 +171,26 @@ void webserverStart(void) {
 
 		// Default
 		wServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-			if (gFSystem.exists("/.html/index.htm")) {
-				// serve webpage from SD card
-				request->send(gFSystem, "/.html/index.htm", String(), false, templateProcessor);
-			} else {
-				// serve webpage from PROGMEM
-				request->send_P(200, "text/html", management_HTML, templateProcessor);
+
+			AsyncWebServerResponse *response;
+
+			// const bool etag = request->hasHeader("if-None-Match") && request->getHeader("if-None-Match")->value().equals(gitRevShort);
+			const bool etag = false;
+			if(etag)
+				response = request->beginResponse(304);
+			else {
+				if (gFSystem.exists("/.html/index.htm"))
+					response = request->beginResponse(gFSystem, "/.html/index.htm", String(), false, templateProcessor);
+				else
+					response = request->beginResponse_P(200, "text/html", management_HTML, templateProcessor);
 			}
+			// response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
+			// response->addHeader("ETag", gitRevShort);		// use git revision as digest
+			request->send(response);
 		});
+
+		WWWData::registerRoutes(serveProgmemFiles);
+
 		// Log
 		wServer.on("/log", HTTP_GET, [](AsyncWebServerRequest *request) {
 			request->send(200, "text/plain; charset=utf-8", Log_GetRingBuffer());
@@ -712,20 +747,20 @@ void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, s
 
 	// New File
 	if (!index) {
+		String utf8Folder = "/";
 		String utf8FilePath;
 		static char filePath[MAX_FILEPATH_LENTGH];
 		if (request->hasParam("path")) {
 			AsyncWebParameter *param = request->getParam("path");
-			utf8FilePath = param->value() + "/" + filename;
-		} else {
-			utf8FilePath = "/" + filename;
+			utf8Folder = param->value() + "/";
 		}
+		utf8FilePath = utf8Folder + filename;
 
 		convertUtf8ToAscii(utf8FilePath, filePath);
 
 		snprintf(Log_Buffer, Log_BufferLength, "%s: %s", (char *)FPSTR (writingFile), utf8FilePath.c_str());
 		Log_Println(Log_Buffer, LOGLEVEL_INFO);
-		Web_DeleteCachefile(utf8FilePath.c_str());
+		Web_DeleteCachefile(utf8Folder.c_str());
 
 		// Create Parent directories
 		explorerCreateParentDirectories(filePath);
@@ -763,9 +798,6 @@ void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, s
 		// watit until the storage task is sending the signal to finish
 		uint8_t signal;
 		xQueueReceive(explorerFileUploadStatusQueue, &signal, portMAX_DELAY);
-
-		// delete task
-		vTaskDelete(fileStorageTaskHandle);
 	}
 }
 
@@ -801,46 +833,11 @@ void explorerHandleFileStorageTask(void *parameter) {
 	BaseType_t uploadFileNotification;
 	uint32_t uploadFileNotificationValue;
 	uploadFile = gFSystem.open((char *)parameter, "w");
-	size_t maxItems = xRingbufferGetMaxItemSize(explorerFileUploadRingBuffer);
+
 	for (;;) {
-		// check buffer is filled with enough data
-		size_t itemsFree = xRingbufferGetCurFreeSize(explorerFileUploadRingBuffer);
-		item_size = maxItems - itemsFree;
-		if (item_size < (maxItems / 2)) {
-			// not enough data in the buffer, check if all data arrived for the file
-			uploadFileNotification = xTaskNotifyWait(0, 0, &uploadFileNotificationValue, 0);
-			if (uploadFileNotification == pdPASS) {
-				item = (uint8_t *)xRingbufferReceive(explorerFileUploadRingBuffer, &item_size, portTICK_PERIOD_MS * 100);
-				if (item != NULL) {
-					chunkCount++;
-					if (!uploadFile.write(item, item_size)) {
-						bytesNok += item_size;
-					} else {
-						bytesOk += item_size;
-					}
-					vRingbufferReturnItem(explorerFileUploadRingBuffer, (void *)item);
-					vTaskDelay(portTICK_PERIOD_MS * 20);
-				}
-				uploadFile.close();
-				snprintf(Log_Buffer, Log_BufferLength, "%s: %s => %zu bytes in %lu ms (%lu kiB/s)", (char *)FPSTR (fileWritten), (char *)parameter, bytesNok+bytesOk, (millis() - transferStartTimestamp), (bytesNok+bytesOk)/(millis() - transferStartTimestamp));
-				Log_Println(Log_Buffer, LOGLEVEL_INFO);
-				snprintf(Log_Buffer, Log_BufferLength, "Bytes [ok] %zu / [not ok] %zu, Chunks: %zu\n", bytesOk, bytesNok, chunkCount);
-				Log_Println(Log_Buffer, LOGLEVEL_DEBUG);
-				// done exit loop to terminate
-				break;
-			}
 
-			if (lastUpdateTimestamp + maxUploadDelay * 1000 < millis()) {
-				snprintf(Log_Buffer, Log_BufferLength, (char *) FPSTR(webTxCanceled));
-				Log_Println(Log_Buffer, LOGLEVEL_ERROR);
-				vTaskDelete(NULL);
-				return;
-			}
-			vTaskDelay(portTICK_PERIOD_MS * 5);
-			continue;
-		}
+		item = (uint8_t *)xRingbufferReceive(explorerFileUploadRingBuffer, &item_size, portTICK_PERIOD_MS * 1u);
 
-		item = (uint8_t *)xRingbufferReceive(explorerFileUploadRingBuffer, &item_size, portTICK_PERIOD_MS * 100);
 		if (item != NULL) {
 			chunkCount++;
 			if (!uploadFile.write(item, item_size)) {
@@ -848,11 +845,34 @@ void explorerHandleFileStorageTask(void *parameter) {
 				feedTheDog();
 			} else {
 				bytesOk += item_size;
+				vRingbufferReturnItem(explorerFileUploadRingBuffer, (void *)item);
 			}
-			vRingbufferReturnItem(explorerFileUploadRingBuffer, (void *)item);
-			feedTheDog();
 			lastUpdateTimestamp = millis();
+		} else {
+			// not enough data in the buffer, check if all data arrived for the file
+			uploadFileNotification = xTaskNotifyWait(0, 0, &uploadFileNotificationValue, 0);
+			if (uploadFileNotification == pdPASS) {
+				uploadFile.close();
+				snprintf(Log_Buffer, Log_BufferLength, "%s: %s => %zu bytes in %lu ms (%lu kiB/s)", (char *)FPSTR (fileWritten), (char *)parameter, bytesNok+bytesOk, (millis() - transferStartTimestamp), (bytesNok+bytesOk)/(millis() - transferStartTimestamp));
+				Log_Println(Log_Buffer, LOGLEVEL_INFO);
+				// done exit loop to terminate
+				break;
+			}
+
+			if (lastUpdateTimestamp + maxUploadDelay * 1000 < millis()) {
+				Log_Println(webTxCanceled, LOGLEVEL_ERROR);
+				// just delete task without signaling (abort)
+				vTaskDelete(NULL);
+				return;
+			}
+
 		}
+		// delay a bit to give the webtask some time fill the ringbuffer
+		#if ESP_ARDUINO_VERSION_MAJOR >= 2
+		vTaskDelay(1u);
+		#else
+		vTaskDelay(5u);
+		#endif
 	}
 	// send signal to upload function to terminate
 	xQueueSend(explorerFileUploadStatusQueue, &value, 0);
