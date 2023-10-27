@@ -34,7 +34,7 @@
     //#define I2S_COMM_FMT_LSB_ENABLE       // Enables FMT instead of MSB for I2S-communication-format. Used e.g. by PT2811. Don't enable for MAX98357a, AC101 or PCM5102A)
     #define MDNS_ENABLE                     // When enabled, you don't have to handle with ESPuino's IP-address. If hostname is set to "ESPuino", you can reach it via ESPuino.local
     #define MQTT_ENABLE                     // Make sure to configure mqtt-server and (optionally) username+pwd
-    //#define FTP_ENABLE                      // Enables FTP-server; DON'T FORGET TO ACTIVATE AFTER BOOT BY PRESSING PAUSE + NEXT-BUTTONS (IN PARALLEL)!
+    //#define FTP_ENABLE                    	   // Enables FTP-server; DON'T FORGET TO ACTIVATE AFTER BOOT BY PRESSING PAUSE + NEXT-BUTTONS (IN PARALLEL)!
     #define NEOPIXEL_ENABLE                 // Don't forget configuration of NUM_LEDS if enabled
     //#define NEOPIXEL_REVERSE_ROTATION     // Some Neopixels are adressed/soldered counter-clockwise. This can be configured here.
     #define LANGUAGE DE                     // DE = deutsch; EN = english
@@ -78,7 +78,7 @@
 	#endif
 
     #ifdef RFID_READER_TYPE_PN5180
-        #define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active. Only ISO-14443-tags are supported for wakeup!
+        //#define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active. Only ISO-14443-tags are supported for wakeup!
     #endif
 
 	#if defined(RFID_READER_TYPE_MFRC522_I2C) || defined(RFID_READER_TYPE_MFRC522_SPI)
@@ -199,8 +199,11 @@
         #define NUM_LEDS                    1          // number of LEDs
         #define CHIPSET                     WS2812B     // type of Neopixel
         #define COLOR_ORDER                 GRB
+        #define NUM_LEDS_IDLE_DOTS          1           // count of LEDs, which are shown when Idle
+        #define OFFSET_PAUSE_LEDS			false
         #define PROGRESS_HUE_START          85          // Start and end hue of mulitple-LED progress indicator. Hue ranges from basically 0 - 255, but you can also set numbers outside this range to get the desired effect (e.g. 85-215 will go from green to purple via blue, 341-215 start and end at exactly the same color but go from green to purple via yellow and red)
         #define PROGRESS_HUE_END            -1
+        #define DIMMABLE_STATES	            50
         //#define LED_OFFSET                0           // shifts the starting LED in the original direction of the neopixel ring
     #endif
 
