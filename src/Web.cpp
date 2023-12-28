@@ -63,6 +63,7 @@ static void explorerHandleDeleteRequest(AsyncWebServerRequest *request);
 static void explorerHandleCreateRequest(AsyncWebServerRequest *request);
 static void explorerHandleRenameRequest(AsyncWebServerRequest *request);
 static void explorerHandleAudioRequest(AsyncWebServerRequest *request);
+static void handleTrackProgressRequest(AsyncWebServerRequest *request);
 static void handleGetSavedSSIDs(AsyncWebServerRequest *request);
 static void handlePostSavedSSIDs(AsyncWebServerRequest *request, JsonVariant &json);
 static void handleDeleteSavedSSIDs(AsyncWebServerRequest *request);
@@ -282,11 +283,16 @@ static void handleWiFiScanRequest(AsyncWebServerRequest *request) {
 	json = String();
 }
 
+unsigned long lastCleanupClientsTimestamp;
+
 void Web_Cyclic(void) {
 	webserverStart();
-	ws.cleanupClients();
+	if ((millis() - lastCleanupClientsTimestamp) > 1000u) {
+		// cleanup closed/deserted websocket clients once per second
+		lastCleanupClientsTimestamp = millis();
+		ws.cleanupClients();
+	}
 }
-
 // handle not found
 void notFound(AsyncWebServerRequest *request) {
 	Log_Printf(LOGLEVEL_ERROR, "%s not found, redirect to startpage", request->url().c_str());
@@ -316,12 +322,17 @@ void webserverStart(void) {
 			} else {
 				if (WiFi.getMode() == WIFI_STA) {
 					// serve management.html in station-mode
+#ifdef NO_SDCARD
+					response = request->beginResponse_P(200, "text/html", (const uint8_t *) management_BIN, sizeof(management_BIN));
+					response->addHeader("Content-Encoding", "gzip");
+#else
 					if (gFSystem.exists("/.html/index.htm")) {
-						response = request->beginResponse(gFSystem, "/.html/index.htm", String(), false);
+						response = request->beginResponse(gFSystem, "/.html/index.htm", "text/html", false);
 					} else {
 						response = request->beginResponse_P(200, "text/html", (const uint8_t *) management_BIN, sizeof(management_BIN));
 						response->addHeader("Content-Encoding", "gzip");
 					}
+#endif
 				} else {
 					// serve accesspoint.html in AP-mode
 					response = request->beginResponse_P(200, "text/html", (const uint8_t *) accesspoint_BIN, sizeof(accesspoint_BIN));
@@ -472,6 +483,8 @@ void webserverStart(void) {
 
 		wServer.on("/exploreraudio", HTTP_POST, explorerHandleAudioRequest);
 
+		wServer.on("/trackprogress", HTTP_GET, handleTrackProgressRequest);
+
 		wServer.on("/savedSSIDs", HTTP_GET, handleGetSavedSSIDs);
 		wServer.addHandler(new AsyncCallbackJsonWebHandler("/savedSSIDs", handlePostSavedSSIDs));
 
@@ -487,6 +500,7 @@ void webserverStart(void) {
 
 		// ESPuino logo
 		wServer.on("/logo", HTTP_GET, [](AsyncWebServerRequest *request) {
+#ifndef NO_SDCARD
 			Log_Println("logo request", LOGLEVEL_DEBUG);
 			if (gFSystem.exists("/.html/logo.png")) {
 				request->send(gFSystem, "/.html/logo.png", "image/png");
@@ -496,14 +510,17 @@ void webserverStart(void) {
 				request->send(gFSystem, "/.html/logo.svg", "image/svg+xml");
 				return;
 			};
+#endif
 			request->redirect("https://www.espuino.de/Espuino.webp");
 		});
 		// ESPuino favicon
 		wServer.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) {
+#ifndef NO_SDCARD
 			if (gFSystem.exists("/.html/favicon.ico")) {
 				request->send(gFSystem, "/.html/favicon.png", "image/x-icon");
 				return;
 			};
+#endif
 			request->redirect("https://espuino.de/espuino/favicon.ico");
 		});
 		// ESPuino settings
@@ -551,7 +568,7 @@ bool JSONToSettings(JsonObject doc) {
 	}
 	if (doc.containsKey("wifi")) {
 		// WiFi settings
-		static String hostName = doc["wifi"]["hostname"];
+		String hostName = doc["wifi"]["hostname"];
 		if (!Wlan_ValidateHostname(hostName)) {
 			Log_Println("Invalid hostname", LOGLEVEL_ERROR);
 			return false;
@@ -687,6 +704,12 @@ bool JSONToSettings(JsonObject doc) {
 		Web_SendWebsocketData(0, 60);
 	} else if (doc.containsKey("ssids")) {
 		Web_SendWebsocketData(0, 70);
+	} else if (doc.containsKey("trackProgress")) {
+		if (doc["trackProgress"].containsKey("posPercent")) {
+			gPlayProperties.seekmode = SEEK_POS_PERCENT;
+			gPlayProperties.currentRelPos = doc["trackProgress"]["posPercent"].as<uint8_t>();
+		}
+		Web_SendWebsocketData(0, 80);
 	}
 
 	return true;
@@ -717,15 +740,11 @@ static void settingsToJSON(JsonObject obj, const String section) {
 	if (section == "ssids") {
 		// saved SSID's
 		JsonObject ssidsObj = obj.createNestedObject("ssids");
-		static String ssids[10];
-
 		JsonArray ssidArr = ssidsObj.createNestedArray("savedSSIDs");
-		size_t len = Wlan_GetSSIDs(ssids, 10);
-		if (len > 0) {
-			for (int i = 0; i < len; i++) {
-				ssidArr.add(ssids[i]);
-			}
-		}
+		Wlan_GetSavedNetworks([ssidArr](const WiFiSettings &network) {
+			ssidArr.add(network.ssid);
+		});
+
 		// active SSID
 		if (Wlan_IsConnected()) {
 			ssidsObj["active"] = Wlan_GetCurrentSSID();
@@ -845,7 +864,7 @@ void handleGetInfo(AsyncWebServerRequest *request) {
 		JsonObject memoryObj = infoObj.createNestedObject("memory");
 		memoryObj["freeHeap"] = ESP.getFreeHeap();
 		memoryObj["largestFreeBlock"] = (uint32_t) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-		if (psramInit()) {
+		if (psramFound()) {
 			memoryObj["freePSRam"] = ESP.getFreePsram();
 		}
 	}
@@ -948,7 +967,24 @@ bool processJsonRequest(char *_serialJson) {
 // Sends JSON-answers via websocket
 void Web_SendWebsocketData(uint32_t client, uint8_t code) {
 	if (!webserverStarted) {
+		// webserver not yet started
 		return;
+	}
+	if (ws.count() == 0) {
+		// we do not have any webclient connected
+		return;
+	}
+	// check if we can send message to the client(s)
+	if (client == 0) {
+		if (!ws.availableForWriteAll()) {
+			Log_Println("Websocket: Cannot send data (Too many messages queued)!", LOGLEVEL_ERROR);
+			return;
+		}
+	} else {
+		if (!ws.availableForWrite(client)) {
+			Log_Printf(LOGLEVEL_ERROR, "Websocket: Cannot send data to client %d (Too many messages queued)!", client);
+			return;
+		}
 	}
 	char *jBuf = (char *) x_calloc(1024, sizeof(char));
 	StaticJsonDocument<1024> doc;
@@ -972,6 +1008,8 @@ void Web_SendWebsocketData(uint32_t client, uint8_t code) {
 		entry["numberOfTracks"] = gPlayProperties.numberOfTracks;
 		entry["volume"] = AudioPlayer_GetCurrentVolume();
 		entry["name"] = gPlayProperties.title;
+		entry["posPercent"] = gPlayProperties.currentRelPos;
+		entry["playMode"] = gPlayProperties.playMode;
 	} else if (code == 40) {
 		object["coverimg"] = "coverimg";
 	} else if (code == 50) {
@@ -982,6 +1020,11 @@ void Web_SendWebsocketData(uint32_t client, uint8_t code) {
 	} else if (code == 70) {
 		JsonObject entry = object.createNestedObject("settings");
 		settingsToJSON(entry, "ssids");
+	} else if (code == 80) {
+		JsonObject entry = object.createNestedObject("trackProgress");
+		entry["posPercent"] = gPlayProperties.currentRelPos;
+		entry["time"] = AudioPlayer_GetCurrentTime();
+		entry["duration"] = AudioPlayer_GetFileDuration();
 	};
 
 	serializeJson(doc, jBuf, 1024);
@@ -1019,7 +1062,7 @@ void onWebsocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 			// Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT) ? "text" : "binary", info->len);
 
 			if (processJsonRequest((char *) data)) {
-				if (data && (strncmp((char *) data, "getTrack", 8))) { // Don't send back ok-feedback if track's name is requested in background
+				if (data && (strncmp((char *) data, "track", 5))) { // Don't send back ok-feedback if track's name is requested in background
 					Web_SendWebsocketData(client->id(), 1);
 				}
 			}
@@ -1244,6 +1287,10 @@ void explorerHandleFileStorageTask(void *parameter) {
 // Sends a list of the content of a directory as JSON file
 // requires a GET parameter path for the directory
 void explorerHandleListRequest(AsyncWebServerRequest *request) {
+#ifdef NO_SDCARD
+	request->send(200, "application/json; charset=utf-8", "[]"); // maybe better to send 404 here?
+	return;
+#endif
 #ifdef BOARD_HAS_PSRAM
 	SpiRamJsonDocument jsonBuffer(65636);
 #else
@@ -1277,12 +1324,9 @@ void explorerHandleListRequest(AsyncWebServerRequest *request) {
 	String MyfileName = root.getNextFileName(&isDir);
 	while (MyfileName != "") {
 		// ignore hidden folders, e.g. MacOS spotlight files
-		if (!startsWith(MyfileName.c_str(), (char *) "/.")) {
+		if (!MyfileName.startsWith("/.")) {
 			JsonObject entry = obj.createNestedObject();
-			convertAsciiToUtf8(MyfileName.c_str(), filePath);
-			std::string path = filePath;
-			std::string fileName = path.substr(path.find_last_of("/") + 1);
-			entry["name"] = fileName;
+			entry["name"] = MyfileName.substring(MyfileName.lastIndexOf('/') + 1);
 			if (isDir) {
 				entry["dir"].set(true);
 			}
@@ -1475,15 +1519,22 @@ void explorerHandleAudioRequest(AsyncWebServerRequest *request) {
 	request->send(200);
 }
 
+// Handles track progress requests
+void handleTrackProgressRequest(AsyncWebServerRequest *request) {
+	String json = "{\"trackProgress\":{";
+	json += "\"posPercent\":" + String(gPlayProperties.currentRelPos);
+	json += ",\"time\":" + String(AudioPlayer_GetCurrentTime());
+	json += ",\"duration\":" + String(AudioPlayer_GetFileDuration());
+	json += "}}";
+	request->send(200, "application/json", json);
+}
+
 void handleGetSavedSSIDs(AsyncWebServerRequest *request) {
 	AsyncJsonResponse *response = new AsyncJsonResponse(true);
 	JsonArray json_ssids = response->getRoot();
-	static String ssids[10];
-
-	size_t len = Wlan_GetSSIDs(ssids, 10);
-	for (int i = 0; i < len; i++) {
-		json_ssids.add(ssids[i]);
-	}
+	Wlan_GetSavedNetworks([json_ssids](const WiFiSettings &network) {
+		json_ssids.add(network.ssid);
+	});
 
 	response->setLength();
 	request->send(response);
@@ -1719,8 +1770,10 @@ static void handleDeleteRFIDRequest(AsyncWebServerRequest *request) {
 		return;
 	}
 	if (gPrefsRfid.isKey(tagId.c_str())) {
-		// stop playback, tag to delete might be in use
-		Cmd_Action(CMD_STOP);
+		if (tagId.equals(gCurrentRfidTagId)) {
+			// stop playback, tag to delete is in use
+			Cmd_Action(CMD_STOP);
+		}
 		if (gPrefsRfid.remove(tagId.c_str())) {
 			Log_Printf(LOGLEVEL_INFO, "/rfid (DELETE): tag %s removed successfuly", tagId);
 			request->send(200, "text/plain; charset=utf-8", tagId + " removed successfuly");
@@ -1885,9 +1938,8 @@ static void handleCoverImageRequest(AsyncWebServerRequest *request) {
 
 	int imageSize = gPlayProperties.coverFileSize;
 	AsyncWebServerResponse *response = request->beginChunkedResponse(mimeType, [coverFile, imageSize](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-		if (maxLen > 1024) {
-			maxLen = 1024;
-		}
+		// some kind of webserver bug with actual size available, reduce the len
+		maxLen = maxLen >> 1;
 
 		File file = coverFile; // local copy of file pointer
 		size_t leftToWrite = imageSize - index;

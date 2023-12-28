@@ -39,6 +39,10 @@ static uint8_t AudioPlayer_MaxVolumeSpeaker = AUDIOPLAYER_VOLUME_MAX;
 static uint8_t AudioPlayer_MinVolume = AUDIOPLAYER_VOLUME_MIN;
 static uint8_t AudioPlayer_InitVolume = AUDIOPLAYER_VOLUME_INIT;
 
+// current playtime
+uint32_t AudioPlayer_CurrentTime;
+uint32_t AudioPlayer_FileDuration;
+
 // Playtime stats
 time_t playTimeSecTotal = 0;
 time_t playTimeSecSinceStart = 0;
@@ -217,13 +221,19 @@ time_t AudioPlayer_GetPlayTimeSinceStart(void) {
 	return (playTimeSecSinceStart * 1000);
 }
 
+uint32_t AudioPlayer_GetCurrentTime(void) {
+	return AudioPlayer_CurrentTime;
+}
+
+uint32_t AudioPlayer_GetFileDuration(void) {
+	return AudioPlayer_FileDuration;
+}
+
 void Audio_setTitle(const char *format, ...) {
-	char buf[256];
 	va_list args;
 	va_start(args, format);
-	vsnprintf(buf, sizeof(buf) / sizeof(buf[0]), format, args);
+	vsnprintf(gPlayProperties.title, sizeof(gPlayProperties.title) / sizeof(gPlayProperties.title[0]), format, args);
 	va_end(args);
-	convertAsciiToUtf8(buf, gPlayProperties.title);
 
 	// notify web ui and mqtt
 	Web_SendWebsocketData(0, 30);
@@ -337,7 +347,9 @@ void AudioPlayer_Task(void *parameter) {
 	audio->setI2SCommFMT_LSB(true);
 #endif
 
-	uint8_t settleCount = 0;
+	constexpr uint32_t playbackTimeout = 2000;
+	uint32_t playbackTimeoutStart = 0;
+
 	AudioPlayer_CurrentVolume = AudioPlayer_GetInitVolume();
 	audio->setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
 	audio->setVolume(AudioPlayer_CurrentVolume, VOLUMECURVE);
@@ -353,6 +365,9 @@ void AudioPlayer_Task(void *parameter) {
 	static BaseType_t trackQStatus;
 	static uint8_t trackCommand = NO_ACTION;
 	bool audioReturnCode;
+	AudioPlayer_CurrentTime = 0;
+	AudioPlayer_FileDuration = 0;
+	static uint32_t AudioPlayer_LastPlaytimeStatsTimestamp = 0u;
 
 	for (;;) {
 		/*
@@ -371,6 +386,22 @@ void AudioPlayer_Task(void *parameter) {
 
 		if (xQueueReceive(gTrackControlQueue, &trackCommand, 0) == pdPASS) {
 			Log_Printf(LOGLEVEL_INFO, newCntrlReceivedQueue, trackCommand);
+		}
+
+		// Update playtime stats every 250 ms
+		if ((millis() - AudioPlayer_LastPlaytimeStatsTimestamp) > 250) {
+			AudioPlayer_LastPlaytimeStatsTimestamp = millis();
+			// Update current playtime and duration
+			AudioPlayer_CurrentTime = audio->getAudioCurrentTime();
+			AudioPlayer_FileDuration = audio->getAudioFileDuration();
+			// Calculate relative position in file (for trackprogress neopixel & web-ui)
+			if (!gPlayProperties.playlistFinished && !gPlayProperties.isWebstream) {
+				if (!gPlayProperties.pausePlay && (gPlayProperties.seekmode != SEEK_POS_PERCENT) && (audio->getFileSize() > 0)) { // To progress necessary when paused
+					gPlayProperties.currentRelPos = ((double) (audio->getFilePos() - audio->inBufferFilled()) / (double) audio->getFileSize()) * 100;
+				}
+			} else {
+				gPlayProperties.currentRelPos = 0;
+			}
 		}
 
 		trackQStatus = xQueueReceive(gTrackQueue, &gPlayProperties.playlist, 0);
@@ -407,6 +438,8 @@ void AudioPlayer_Task(void *parameter) {
 					}
 				}
 				if (gPlayProperties.sleepAfterCurrentTrack) { // Go to sleep if "sleep after track" was requested
+					gPlayProperties.playlistFinished = true;
+					gPlayProperties.playMode = NO_PLAYLIST;
 					System_RequestSleep();
 					break;
 				}
@@ -717,6 +750,13 @@ void AudioPlayer_Task(void *parameter) {
 				} else {
 					System_IndicateError();
 				}
+			} else if ((gPlayProperties.seekmode == SEEK_POS_PERCENT) && (gPlayProperties.currentRelPos > 0) && (gPlayProperties.currentRelPos < 100)) {
+				uint32_t newFilePos = uint32_t((double) (gPlayProperties.currentRelPos / 100) * audio->getFileSize());
+				if (audio->setFilePos(newFilePos)) {
+					Log_Printf(LOGLEVEL_NOTICE, JumpToPosition, newFilePos, audio->getFileSize());
+				} else {
+					System_IndicateError();
+				}
 			}
 			gPlayProperties.seekmode = SEEK_NORMAL;
 		}
@@ -782,17 +822,6 @@ void AudioPlayer_Task(void *parameter) {
 			}
 		}
 
-		// Calculate relative position in file (for neopixel) for SD-card-mode
-		if (!gPlayProperties.playlistFinished && !gPlayProperties.isWebstream) {
-			if (millis() % 20 == 0) { // Keep it simple
-				if (!gPlayProperties.pausePlay && (audio->getFileSize() > 0)) { // To progress necessary when paused
-					gPlayProperties.currentRelPos = ((double) (audio->getFilePos() - audio->inBufferFilled()) / (double) audio->getFileSize()) * 100;
-				}
-			}
-		} else {
-			gPlayProperties.currentRelPos = 0;
-		}
-
 		audio->loop();
 		if (gPlayProperties.playlistFinished || gPlayProperties.pausePlay) {
 			if (!gPlayProperties.currentSpeechActive) {
@@ -803,15 +832,16 @@ void AudioPlayer_Task(void *parameter) {
 		}
 
 		if (audio->isRunning()) {
-			settleCount = 0;
+			playbackTimeoutStart = millis();
 		}
 
-		// If error occured: remove playlist from ESPuino
+		// If error occured: move to the next track in the playlist
 		if (gPlayProperties.playMode != NO_PLAYLIST && gPlayProperties.playMode != BUSY && !audio->isRunning() && !gPlayProperties.pausePlay) {
-			if (settleCount++ == 50) { // Hack to give audio some time to settle down after playlist was generated
-				gPlayProperties.playlistFinished = true;
-				gPlayProperties.playMode = NO_PLAYLIST;
-				settleCount = 0;
+			if ((millis() - playbackTimeoutStart) > playbackTimeout) {
+				// Audio playback timed out, move on to the next
+				System_IndicateError();
+				gPlayProperties.trackFinished = true;
+				playbackTimeoutStart = millis();
 			}
 		}
 		if ((System_GetOperationMode() == OPMODE_BLUETOOTH_SOURCE) && audio->isRunning()) {

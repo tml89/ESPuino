@@ -2,7 +2,28 @@
 
 ## DEV-branch
 
-* more to come...
+* 08.12.2023: Fix webstream playlist abort when track fails (#276), thanks to @laszloh !
+* 07.12.2023: Show RC522 firmware version at startup, same as PN5180
+* 04.12.2023: fix stuttering sound with some WAV & MP3 files, thanks to @wolle !
+* 04.12.2023: change trackprogress communication from websocket to http to improve stability
+* 04.12.2023: Remove some convertAsciiToUtf8() #272 
+* 30.11.2023: Fix a nullptr access after trying to replay an invalid filename (#271), thanks to Olaf!
+* 29.11.2023: Updated audio library to play more MP3s, faster track change & delivery of the cover image
+* 25.11.2023: Save some cpu time in audio task by only updating the playtime statistics every 250ms
+* 22.11.2023: Web-UI: Search for files feature #268 
+* 21.11.2023: New command CMD_TOGGLE_MODE to switch Normal => BT-Sink => BT-Source
+* 21.11.2023: Bugfix: Some commands e.g. Play/Pause did not work in BT-Source mode
+* 21.11.2023: Faster pairing animation in BT-Source mode to better distinguish between the two BT modes
+* 19.11.2023: Give audiotask a higher task priority, fixes crackling sound
+* 19.11.2023: bugfix_same_rfid_twice init #262, see Github comments 
+* 17.11.2023: Show track progress, current playtime & duration in web-ui (#267)
+* 16.11.2023: Fix delay with getLocalTime()
+* 14.11.2023: Multi Wlan improvements (#266), thanks to @laszloh !
+* 13.11.2023: Update third party libraries
+* 08.11.2023: Fix HTML syntax errors, found with static code analysis tool "HtmlHint"
+* 08.11.2023: Better logging for boards without PSRAM, fewer logs when compiling with NO_SDCARD
+* 07.11.2023: Set timezone after startup, thanks to @Joe91 !
+
 
 ## Version 2 (07.11.2023)
 
