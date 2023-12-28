@@ -348,7 +348,7 @@ void AudioPlayer_Task(void *parameter) {
 #endif
 
 	constexpr uint32_t playbackTimeout = 2000;
-	uint32_t playbackTimeoutStart = 0;
+	uint32_t playbackTimeoutStart = millis();
 
 	AudioPlayer_CurrentVolume = AudioPlayer_GetInitVolume();
 	audio->setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
@@ -407,12 +407,19 @@ void AudioPlayer_Task(void *parameter) {
 		trackQStatus = xQueueReceive(gTrackQueue, &gPlayProperties.playlist, 0);
 		if (trackQStatus == pdPASS || gPlayProperties.trackFinished || trackCommand != NO_ACTION) {
 			if (trackQStatus == pdPASS) {
-				if (gPlayProperties.pausePlay) {
-					gPlayProperties.pausePlay = false;
-				}
 				audio->stopSong();
 				Log_Printf(LOGLEVEL_NOTICE, newPlaylistReceived, gPlayProperties.numberOfTracks);
 				Log_Printf(LOGLEVEL_DEBUG, "Free heap: %u", ESP.getFreeHeap());
+				playbackTimeoutStart = millis();
+				gPlayProperties.pausePlay = false;
+				gPlayProperties.repeatCurrentTrack = false;
+				gPlayProperties.repeatPlaylist = false;
+				gPlayProperties.sleepAfterCurrentTrack = false;
+				gPlayProperties.sleepAfterPlaylist = false;
+				gPlayProperties.saveLastPlayPosition = false;
+				gPlayProperties.playUntilTrackNumber = 0;
+				gPlayProperties.trackFinished = false;
+				gPlayProperties.playlistFinished = false;
 
 #ifdef MQTT_ENABLE
 				publishMqtt(topicPlaymodeState, gPlayProperties.playMode, false);
@@ -427,7 +434,7 @@ void AudioPlayer_Task(void *parameter) {
 			}
 			if (gPlayProperties.trackFinished) {
 				gPlayProperties.trackFinished = false;
-				if (gPlayProperties.playMode == NO_PLAYLIST) {
+				if (gPlayProperties.playMode == NO_PLAYLIST || gPlayProperties.playlist == nullptr) {
 					gPlayProperties.playlistFinished = true;
 					continue;
 				}
@@ -836,13 +843,20 @@ void AudioPlayer_Task(void *parameter) {
 		}
 
 		// If error occured: move to the next track in the playlist
-		if (gPlayProperties.playMode != NO_PLAYLIST && gPlayProperties.playMode != BUSY && !audio->isRunning() && !gPlayProperties.pausePlay) {
-			if ((millis() - playbackTimeoutStart) > playbackTimeout) {
+		const bool activeMode = (gPlayProperties.playMode != NO_PLAYLIST && gPlayProperties.playMode != BUSY);
+		const bool noAudio = (!audio->isRunning() && !gPlayProperties.pausePlay);
+		const bool timeout = ((millis() - playbackTimeoutStart) > playbackTimeout);
+		if (activeMode) {
+			// we check for timeout
+			if (noAudio && timeout) {
 				// Audio playback timed out, move on to the next
 				System_IndicateError();
 				gPlayProperties.trackFinished = true;
 				playbackTimeoutStart = millis();
 			}
+		} else {
+			// we are idle, update timeout so that we do not get a spurious error when launching into a playlist
+			playbackTimeoutStart = millis();
 		}
 		if ((System_GetOperationMode() == OPMODE_BLUETOOTH_SOURCE) && audio->isRunning()) {
 			// do not delay here, audio task is time critical in BT-Source mode
@@ -987,13 +1001,6 @@ void AudioPlayer_TrackQueueDispatcher(const char *_itemToPlay, const uint32_t _l
 
 	gPlayProperties.playMode = _playMode;
 	gPlayProperties.numberOfTracks = strtoul(*(musicFiles - 1), NULL, 10);
-	// Set some default-values
-	gPlayProperties.repeatCurrentTrack = false;
-	gPlayProperties.repeatPlaylist = false;
-	gPlayProperties.sleepAfterCurrentTrack = false;
-	gPlayProperties.sleepAfterPlaylist = false;
-	gPlayProperties.saveLastPlayPosition = false;
-	gPlayProperties.playUntilTrackNumber = 0;
 
 #ifdef PLAY_LAST_RFID_AFTER_REBOOT
 	// Store last RFID-tag to NVS

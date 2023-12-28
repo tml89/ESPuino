@@ -2,7 +2,15 @@
 
 ## DEV-branch
 
-* 08.12.2023: Fix webstream playlist abort when track fails (#276), thanks to @laszloh !
+* 23.12.2023: Update audio library, avoid waiting in i2s_channel_write() to have more time in other tasks #636
+* 22.12.2023: Web-UI: Preselection of root folder after load to avoid nasty warning when uploading files
+* 17.12.2023: Update audio library, fixes click-noise seeking in file 
+* 13.12.2023: Immediately go to sleep if battery is critical (#274), thanks to @SZenglein ! 
+* 12.12.2023: Long press behaviour, execute cmd directly after longpress-time (#279), thanks to @Joe91 ! 
+* 12.12.2023: Fix false-positive error (Audio playback timeout)
+* 10.12.2023: Distribute vTaskDelay() in main loop to avoid rare audio dropouts
+* 10.12.2023: Fix wrong states on PE output pins (and SD-card failure on restart) #278, thanks to @36b6fp6s ! 
+* 09.12.2023: Fix webstream playlist abort when track fails (#276), thanks to @laszloh !
 * 07.12.2023: Show RC522 firmware version at startup, same as PN5180
 * 04.12.2023: fix stuttering sound with some WAV & MP3 files, thanks to @wolle !
 * 04.12.2023: change trackprogress communication from websocket to http to improve stability
