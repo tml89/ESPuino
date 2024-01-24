@@ -79,9 +79,9 @@
 		#define MFRC522_ADDR 0x28           // default I2C-address of MFRC522
 	#endif
 
-    #ifdef RFID_READER_TYPE_PN5180
-        #define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active. Only ISO-14443-tags are supported for wakeup!
-    #endif
+	#ifdef RFID_READER_TYPE_PN5180
+		//#define PN5180_ENABLE_LPCD        // Wakes up ESPuino if RFID-tag was applied while deepsleep is active.
+	#endif
 
 	#if defined(RFID_READER_TYPE_MFRC522_I2C) || defined(RFID_READER_TYPE_MFRC522_SPI)
 		constexpr uint8_t rfidGain = 0x07 << 4;      // Sensitivity of RC522. For possible values see reference: https://forum.espuino.de/uploads/default/original/1X/9de5f8d35cbc123c1378cad1beceb3f51035cec0.png
@@ -319,6 +319,5 @@
 		#include "settings-custom.h"                        // Contains all user-relevant settings custom-board
 	#endif
 
-	//#define ENABLE_ESPUINO_DEBUG                            // Needs modification of platformio.ini (https://forum.espuino.de/t/rfid-mit-oder-ohne-task/353/21); better don't enable unless you know what you're doing :-)
 	#endif //settings_override
 #endif

@@ -2,6 +2,26 @@
 
 ## DEV-branch
 
+* 23.01.2024: Updated documentation on LPCD setting, thanks to @derpicknicker1 !
+* 21.01.2024: Build (tag 2.2) is broken when NEOPIXEL_ENABLE is not set #289, thanks to @RolinBert !
+* 21.01.2024: PN5180: Save about 500 Bytes of RAM
+
+
+## Version 2.2 (17.01.2024)
+
+* 14.01.2024: Modify CMD_DIMM_LEDS_NIGHTMODE to toggle night light mode (#287), thanks to @laszloh !
+* 11.01.2024: More free heap on boards with PSRAM (CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL)
+* 10.01.2024: LPCD for ISO-15693 cards
+* 05.01.2024: REST-API specification, thanks to @pauel !
+* 02.01.2024: Partly revert: Fix webstream playlist abort when track fails (#285), thanks to @sfields !
+* 02.01.2024: Show critical voltage slider only if SHUTDOWN_ON_BAT_CRITICAL defined
+* 29.12.2023: Show station logo in Web-UI (if available)
+* 29.12.2023: /rfid endpoint: List all assigned nvs entries (#280)
+* 29.12.2023: Enhanced capabilities for task runtime debugging
+* 28.12.2023: Bugfix 1: DONT_ACCEPT_SAME_RFID_TWICE_ENABLE and web frontend, thanks to @sfields !
+* 28.12.2023: Add configuration for critical (shutoff) voltage in Web-UI, thanks to @SZenglein ! 
+* 28.12.2023: New official PlatformIO package 6.5.0 (Arduino 2.0.14, ESP-IDF 4.4.6)
+* 28.12.2023: Improve port expander handling (#283), thanks to @r-schmidt !
 * 23.12.2023: Update audio library, avoid waiting in i2s_channel_write() to have more time in other tasks #636
 * 22.12.2023: Web-UI: Preselection of root folder after load to avoid nasty warning when uploading files
 * 17.12.2023: Update audio library, fixes click-noise seeking in file 
