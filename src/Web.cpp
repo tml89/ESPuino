@@ -10,6 +10,7 @@
 #include "Cmd.h"
 #include "Common.h"
 #include "ESPAsyncWebServer.h"
+#include "EnumUtils.h"
 #include "Ftp.h"
 #include "HTMLbinary.h"
 #include "HallEffectSensor.h"
@@ -29,7 +30,7 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
-#include <nvsDump.h>
+#include <nvs.h>
 
 typedef struct {
 	char nvsKey[13];
@@ -41,16 +42,24 @@ AsyncWebSocket ws("/ws");
 AsyncEventSource events("/events");
 
 static bool webserverStarted = false;
-static const uint32_t chunk_size = 16384; // bigger chunks increase write-performance to SD-Card
-static const uint32_t nr_of_buffers = 2; // at least two buffers. No speed improvement yet with more than two.
 
-uint8_t buffer[nr_of_buffers][chunk_size];
+#ifdef BOARD_HAS_PSRAM
+static const uint32_t start_chunk_size = 16384; // bigger chunks increase write-performance to SD-Card
+#else
+static const uint32_t start_chunk_size = 4096; // save memory if no PSRAM is available
+#endif
+
+static constexpr uint32_t nr_of_buffers = 2; // at least two buffers. No speed improvement yet with more than two.
+static constexpr size_t retry_count = 2; // how often we retry is a malloc fails (also the times we halfe the chunk_size)
+
+uint8_t *buffer[nr_of_buffers];
+size_t chunk_size;
 volatile uint32_t size_in_buffer[nr_of_buffers];
 volatile bool buffer_full[nr_of_buffers];
 uint32_t index_buffer_write = 0;
 uint32_t index_buffer_read = 0;
 
-static QueueHandle_t explorerFileUploadStatusQueue;
+static SemaphoreHandle_t explorerFileUploadFinished;
 static TaskHandle_t fileStorageTaskHandle;
 
 void Web_DumpSdToNvs(const char *_filename);
@@ -85,6 +94,18 @@ static void settingsToJSON(JsonObject obj, const String section);
 static bool JSONToSettings(JsonObject obj);
 static void webserverStart(void);
 
+// IPAddress converters, for a description see: https://arduinojson.org/news/2021/05/04/version-6-18-0/
+void convertFromJson(JsonVariantConst src, IPAddress &dst) {
+	dst.fromString(src.as<const char *>());
+}
+bool canConvertFromJson(JsonVariantConst src, const IPAddress &) {
+	if (!src.is<const char *>()) {
+		return false; // this is not a string
+	}
+	IPAddress dst;
+	return dst.fromString(src.as<const char *>());
+}
+
 // If PSRAM is available use it allocate memory for JSON-objects
 struct SpiRamAllocator {
 	void *allocate(size_t size) {
@@ -95,6 +116,59 @@ struct SpiRamAllocator {
 	}
 };
 using SpiRamJsonDocument = BasicJsonDocument<SpiRamAllocator>;
+
+static void destroyDoubleBuffer() {
+	for (size_t i = 0; i < nr_of_buffers; i++) {
+		free(buffer[i]);
+		buffer[i] = nullptr;
+	}
+}
+
+static bool allocateDoubleBuffer() {
+	const auto checkAndAlloc = [](uint8_t *&ptr, const size_t memSize) -> bool {
+		if (ptr) {
+			// memory is there, so nothing to do
+			return true;
+		}
+		// try to allocate buffer in faster internal RAM, not in PSRAM
+		// ptr = (uint8_t *) malloc(memSize);
+		ptr = (uint8_t *) heap_caps_aligned_alloc(32, memSize, MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+		return (ptr != nullptr);
+	};
+
+	chunk_size = start_chunk_size;
+	size_t retries = retry_count;
+	while (retries) {
+		if (chunk_size < 256) {
+			// give up, since there is not even 256 bytes of memory left
+			break;
+		}
+		bool success = true;
+		for (size_t i = 0; i < nr_of_buffers; i++) {
+			success &= checkAndAlloc(buffer[i], chunk_size);
+		}
+		if (success) {
+			return true;
+		} else {
+			// one of our buffer went OOM --> free all buffer and retry with less chunk size
+			destroyDoubleBuffer();
+			chunk_size /= 2;
+			retries--;
+		}
+	}
+	destroyDoubleBuffer();
+	return false;
+}
+
+void handleUploadError(AsyncWebServerRequest *request, int code) {
+	if (request->_tempObject) {
+		// we already have an error entered
+		return;
+	}
+	// send the error to the client and record it in the request
+	request->_tempObject = new int(code);
+	request->send(code);
+}
 
 static void serveProgmemFiles(const String &uri, const String &contentType, const uint8_t *content, size_t len) {
 	wServer.on(uri.c_str(), HTTP_GET, [contentType, content, len](AsyncWebServerRequest *request) {
@@ -156,61 +230,25 @@ public:
 // List all key in NVS for a given namespace
 // callback function is called for every key with userdefined data object
 bool listNVSKeys(const char *_namespace, void *data, bool (*callback)(const char *key, void *data)) {
-	Led_SetPause(true); // Workaround to prevent exceptions due to Neopixel-signalisation while NVS-write
-	esp_partition_iterator_t pi; // Iterator for find
-	const esp_partition_t *nvs; // Pointer to partition struct
-	esp_err_t result = ESP_OK;
-	const char *partname = "nvs";
-	uint8_t pagenr = 0; // Page number in NVS
-	uint8_t i; // Index in Entry 0..125
-	uint8_t bm; // Bitmap for an entry
-	uint32_t offset = 0; // Offset in nvs partition
-	uint8_t namespace_ID; // Namespace ID found
+	constexpr const char *partname = "nvs";
 
-	pi = esp_partition_find(ESP_PARTITION_TYPE_DATA, // Get partition iterator for
-		ESP_PARTITION_SUBTYPE_ANY, // this partition
-		partname);
-	if (pi) {
-		nvs = esp_partition_get(pi); // Get partition struct
-		esp_partition_iterator_release(pi); // Release the iterator
-		Log_Printf(LOGLEVEL_DEBUG, "Partition %s found, %d bytes", partname, nvs->size);
-	} else {
-		Log_Printf(LOGLEVEL_ERROR, "Partition %s not found!", partname);
+	nvs_iterator_t it = nvs_entry_find(partname, _namespace, NVS_TYPE_ANY);
+	if (it == nullptr) {
+		// no entries found
 		return false;
 	}
-	namespace_ID = FindNsID(nvs, _namespace); // Find ID of our namespace in NVS
-	while (offset < nvs->size) {
-		result = esp_partition_read(nvs, offset, // Read 1 page in nvs partition
-			&buf,
-			sizeof(nvs_page));
-		if (result != ESP_OK) {
-			Log_Println("Error reading NVS!", LOGLEVEL_ERROR);
-			return false;
-		}
-
-		i = 0;
-
-		while (i < 126) {
-			bm = (buf.Bitmap[i / 4] >> ((i % 4) * 2)) & 0x03; // Get bitmap for this entry
-			if (bm == 2) {
-				if ((namespace_ID == 0xFF) || // Show all if ID = 0xFF
-					(buf.Entry[i].Ns == namespace_ID)) { // otherwise just my namespace
-					if (isNumber(buf.Entry[i].Key)) {
-						if (!callback(buf.Entry[i].Key, data)) {
-							return false;
-						}
-					}
-				}
-				i += buf.Entry[i].Span; // Next entry
-			} else {
-				i++;
+	while (it != nullptr) {
+		nvs_entry_info_t info;
+		nvs_entry_info(it, &info); // we got the key name here
+		// some basic sanity checks
+		if (isNumber(info.key)) {
+			if (!callback(info.key, data)) {
+				return false;
 			}
 		}
-		offset += sizeof(nvs_page); // Prepare to read next page in nvs
-		pagenr++;
+		// finished, NEXT!
+		it = nvs_entry_next(it);
 	}
-	Led_SetPause(false);
-
 	return true;
 }
 
@@ -430,8 +468,12 @@ void webserverStart(void) {
 			response->print("</head><body>");
 			// show memory usage
 			response->println("Memory:<div class='text'><pre>");
-			response->println("Free heap: " + String(ESP.getFreeHeap()));
-			response->println("Largest free block: " + String(ESP.getMaxAllocHeap()));
+			response->println("Free heap:           " + String(ESP.getFreeHeap()));
+			response->println("Largest free block:  " + String(ESP.getMaxAllocHeap()));
+	#ifdef BOARD_HAS_PSRAM
+			response->println("Free PSRAM heap:     " + String(ESP.getFreePsram()));
+			response->println("Largest PSRAM block: " + String(ESP.getMaxAllocPsram()));
+	#endif
 			response->println("</pre></div><br>");
 			// show tasklist
 			response->println("Tasklist:<div class='text'><pre>");
@@ -481,7 +523,11 @@ void webserverStart(void) {
 
 		wServer.on(
 			"/explorer", HTTP_POST, [](AsyncWebServerRequest *request) {
-				request->send(200);
+				// we are finished with the upload
+				if (!request->_tempObject) {
+					request->onDisconnect([]() { destroyDoubleBuffer(); });
+					request->send(200);
+				}
 			},
 			explorerHandleFileUpload);
 
@@ -605,6 +651,13 @@ bool JSONToSettings(JsonObject doc) {
 		}
 		Battery_Init();
 	}
+	if (doc.containsKey("playlist")) {
+		// playlist settings
+		if (!AudioPlayer_SetPlaylistSortMode(doc["playlist"]["sortMode"].as<uint8_t>())) {
+			Log_Printf(LOGLEVEL_ERROR, webSaveSettingsError, "playlist");
+			return false;
+		}
+	}
 	if (doc.containsKey("ftp")) {
 		const char *_ftpUser = doc["ftp"]["username"];
 		const char *_ftpPwd = doc["ftp"]["password"];
@@ -671,8 +724,7 @@ bool JSONToSettings(JsonObject doc) {
 		Web_DumpNvsToSd("rfidTags", backupFile); // Store backup-file every time when a new rfid-tag is programmed
 	} else if (doc.containsKey("rfidAssign")) {
 		const char *_rfidIdAssinId = doc["rfidAssign"]["rfidIdMusic"];
-		char _fileOrUrlAscii[MAX_FILEPATH_LENTGH];
-		convertFilenameToAscii(doc["rfidAssign"]["fileOrUrl"], _fileOrUrlAscii);
+		const char *_fileOrUrlAscii = doc["rfidAssign"]["fileOrUrl"];
 		uint8_t _playMode = doc["rfidAssign"]["playMode"];
 		if (_playMode <= 0) {
 			Log_Println("rfidAssign: Invalid playmode", LOGLEVEL_ERROR);
@@ -770,6 +822,11 @@ static void settingsToJSON(JsonObject obj, const String section) {
 		ledObj["nightBrightness"].set(gPrefsSettings.getUChar("nLedBrightness", 0));
 	}
 #endif
+	// playlist
+	if ((section == "") || (section == "playlist")) {
+		JsonObject playlistObj = obj.createNestedObject("playlist");
+		playlistObj["sortMode"] = EnumUtils::underlying_value(AudioPlayer_GetPlaylistSortMode());
+	}
 #ifdef BATTERY_MEASURE_ENABLE
 	if ((section == "") || (section == "battery")) {
 		// battery settings
@@ -797,6 +854,7 @@ static void settingsToJSON(JsonObject obj, const String section) {
 		defaultsObj["initBrightness"].set(16u); // LED_INITIAL_BRIGHTNESS
 		defaultsObj["nightBrightness"].set(2u); // LED_INITIAL_NIGHT_BRIGHTNESS
 #endif
+		defaultsObj["sortMode"].set(EnumUtils::underlying_value(AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT));
 #ifdef BATTERY_MEASURE_ENABLE
 	#ifdef MEASURE_BATTERY_VOLTAGE
 		defaultsObj["warnLowVoltage"].set(s_warningLowVoltage);
@@ -887,9 +945,10 @@ void handleGetInfo(AsyncWebServerRequest *request) {
 		JsonObject memoryObj = infoObj.createNestedObject("memory");
 		memoryObj["freeHeap"] = ESP.getFreeHeap();
 		memoryObj["largestFreeBlock"] = (uint32_t) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-		if (psramFound()) {
-			memoryObj["freePSRam"] = ESP.getFreePsram();
-		}
+#ifdef BOARD_HAS_PSRAM
+		memoryObj["freePSRam"] = ESP.getFreePsram();
+		memoryObj["largestFreePSRamBlock"] = String(ESP.getMaxAllocPsram());
+#endif
 	}
 	// wifi
 	if ((section == "") || (section == "wifi")) {
@@ -977,9 +1036,9 @@ void handlePostSettings(AsyncWebServerRequest *request, JsonVariant &json) {
 void handleDebugRequest(AsyncWebServerRequest *request) {
 
 #ifdef BOARD_HAS_PSRAM
-	SpiRamJsonDocument doc(1000);
+	SpiRamJsonDocument doc(2048);
 #else
-	StaticJsonDocument<1000> doc;
+	StaticJsonDocument<2048> doc;
 #endif
 
 	JsonObject infoObj = doc.createNestedObject("info");
@@ -1164,24 +1223,6 @@ void onWebsocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 	}
 }
 
-void explorerCreateParentDirectories(const char *filePath) {
-	char tmpPath[MAX_FILEPATH_LENTGH];
-	char *rest;
-
-	rest = strchr(filePath, '/');
-	while (rest) {
-		if (rest - filePath != 0) {
-			memcpy(tmpPath, filePath, rest - filePath);
-			tmpPath[rest - filePath] = '\0';
-			if (!gFSystem.exists(tmpPath)) {
-				Log_Printf(LOGLEVEL_DEBUG, "creating dir \"%s\"\n", tmpPath);
-				gFSystem.mkdir(tmpPath);
-			}
-		}
-		rest = strchr(rest + 1, '/');
-	}
-}
-
 // Handles file upload request from the explorer
 // requires a GET parameter path, as directory path to the file
 void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
@@ -1192,23 +1233,26 @@ void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, s
 	if (!index) {
 		String utf8Folder = "/";
 		String utf8FilePath;
-		static char filePath[MAX_FILEPATH_LENTGH];
 		if (request->hasParam("path")) {
 			const AsyncWebParameter *param = request->getParam("path");
 			utf8Folder = param->value() + "/";
 		}
 		utf8FilePath = utf8Folder + filename;
 
-		convertFilenameToAscii(utf8FilePath, filePath);
+		const char *filePath = utf8FilePath.c_str();
 
-		Log_Printf(LOGLEVEL_INFO, writingFile, utf8FilePath.c_str());
+		Log_Printf(LOGLEVEL_INFO, writingFile, filePath);
 
-		// Create Parent directories
-		explorerCreateParentDirectories(filePath);
+		if (!allocateDoubleBuffer()) {
+			// we failed to allocate enough memory
+			Log_Println(unableToAllocateMem, LOGLEVEL_ERROR);
+			handleUploadError(request, 500);
+			return;
+		}
 
 		// Create Queue for receiving a signal from the store task as synchronisation
-		if (explorerFileUploadStatusQueue == NULL) {
-			explorerFileUploadStatusQueue = xQueueCreate(1, sizeof(uint8_t));
+		if (explorerFileUploadFinished == NULL) {
+			explorerFileUploadFinished = xSemaphoreCreateBinary();
 		}
 
 		// reset buffers
@@ -1220,15 +1264,23 @@ void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, s
 		}
 
 		// Create Task for handling the storage of the data
+		const char *filePathCopy = x_strdup(filePath);
 		xTaskCreatePinnedToCore(
 			explorerHandleFileStorageTask, /* Function to implement the task */
 			"fileStorageTask", /* Name of the task */
 			4000, /* Stack size in words */
-			filePath, /* Task input parameter */
+			(void *) filePathCopy, /* Task input parameter */
 			2 | portPRIVILEGE_BIT, /* Priority of the task */
 			&fileStorageTaskHandle, /* Task handle. */
 			1 /* Core where the task should run */
 		);
+
+		// register for early disconnect events
+		request->onDisconnect([]() {
+			// client went away before we were finished...
+			// trigger task suicide, since we can not use Log_Println here
+			xTaskNotify(fileStorageTaskHandle, 2u, eSetValueWithOverwrite);
+		});
 	}
 
 	if (len) {
@@ -1271,10 +1323,9 @@ void explorerHandleFileUpload(AsyncWebServerRequest *request, String filename, s
 			buffer_full[index_buffer_write] = true;
 		}
 		// notify storage task that last data was stored on the ring buffer
-		xTaskNotify(fileStorageTaskHandle, 1u, eNoAction);
+		xTaskNotify(fileStorageTaskHandle, 1u, eSetValueWithOverwrite);
 		// watit until the storage task is sending the signal to finish
-		uint8_t signal;
-		xQueueReceive(explorerFileUploadStatusQueue, &signal, portMAX_DELAY);
+		xSemaphoreTake(explorerFileUploadFinished, portMAX_DELAY);
 	}
 }
 
@@ -1295,19 +1346,21 @@ void feedTheDog(void) {
 #endif
 }
 
+// task for writing uploaded data from buffer to SD
+// parameter contains the target file path and must be freed by the task.
 void explorerHandleFileStorageTask(void *parameter) {
+	const char *filePath = (const char *) parameter;
 	File uploadFile;
 	size_t bytesOk = 0;
 	size_t bytesNok = 0;
 	uint32_t chunkCount = 0;
 	uint32_t transferStartTimestamp = millis();
-	uint8_t value = 0;
 	uint32_t lastUpdateTimestamp = millis();
 	uint32_t maxUploadDelay = 20; // After this delay (in seconds) task will be deleted as transfer is considered to be finally broken
 
 	BaseType_t uploadFileNotification;
 	uint32_t uploadFileNotificationValue;
-	uploadFile = gFSystem.open((char *) parameter, "w");
+	uploadFile = gFSystem.open(filePath, "w", true); // open file with create=true to make sure parent directories are created
 	uploadFile.setBufferSize(chunk_size);
 
 	// pause some tasks to get more free CPU time for the upload
@@ -1318,7 +1371,7 @@ void explorerHandleFileStorageTask(void *parameter) {
 	for (;;) {
 		// check buffer is full with enough data or all data already sent
 		uploadFileNotification = xTaskNotifyWait(0, 0, &uploadFileNotificationValue, 0);
-		if ((buffer_full[index_buffer_read]) || (uploadFileNotification == pdPASS)) {
+		if ((buffer_full[index_buffer_read]) || (uploadFileNotification == pdPASS && uploadFileNotificationValue == 1u)) {
 
 			while (buffer_full[index_buffer_read]) {
 				chunkCount++;
@@ -1339,18 +1392,21 @@ void explorerHandleFileStorageTask(void *parameter) {
 
 			if (uploadFileNotification == pdPASS) {
 				uploadFile.close();
-				Log_Printf(LOGLEVEL_INFO, fileWritten, (char *) parameter, bytesNok + bytesOk, (millis() - transferStartTimestamp), (bytesNok + bytesOk) / (millis() - transferStartTimestamp));
+				Log_Printf(LOGLEVEL_INFO, fileWritten, filePath, bytesNok + bytesOk, (millis() - transferStartTimestamp), (bytesNok + bytesOk) / (millis() - transferStartTimestamp));
 				Log_Printf(LOGLEVEL_DEBUG, "Bytes [ok] %zu / [not ok] %zu, Chunks: %zu\n", bytesOk, bytesNok, chunkCount);
 				// done exit loop to terminate
 				break;
 			}
 		} else {
-			if (lastUpdateTimestamp + maxUploadDelay * 1000 < millis()) {
+			if (lastUpdateTimestamp + maxUploadDelay * 1000 < millis() || (uploadFileNotification == pdPASS && uploadFileNotificationValue == 2u)) {
 				Log_Println(webTxCanceled, LOGLEVEL_ERROR);
+				free(parameter);
 				// resume the paused tasks
 				Led_TaskResume();
 				vTaskResume(AudioTaskHandle);
 				Rfid_TaskResume();
+				// destroy double buffer memory, since the upload was interrupted
+				destroyDoubleBuffer();
 				// just delete task without signaling (abort)
 				vTaskDelete(NULL);
 				return;
@@ -1359,12 +1415,13 @@ void explorerHandleFileStorageTask(void *parameter) {
 			continue;
 		}
 	}
+	free(parameter);
 	// resume the paused tasks
 	Led_TaskResume();
 	vTaskResume(AudioTaskHandle);
 	Rfid_TaskResume();
 	// send signal to upload function to terminate
-	xQueueSend(explorerFileUploadStatusQueue, &value, 0);
+	xSemaphoreGive(explorerFileUploadFinished);
 	vTaskDelete(NULL);
 }
 
@@ -1386,9 +1443,8 @@ void explorerHandleListRequest(AsyncWebServerRequest *request) {
 	File root;
 	if (request->hasParam("path")) {
 		AsyncWebParameter *param;
-		char filePath[MAX_FILEPATH_LENTGH];
 		param = request->getParam("path");
-		convertFilenameToAscii(param->value(), filePath);
+		const char *filePath = param->value().c_str();
 		root = gFSystem.open(filePath);
 	} else {
 		root = gFSystem.open("/");
@@ -1451,7 +1507,6 @@ bool explorerDeleteDirectory(File dir) {
 void explorerHandleDownloadRequest(AsyncWebServerRequest *request) {
 	File file;
 	AsyncWebParameter *param;
-	char filePath[MAX_FILEPATH_LENTGH];
 	// check has path param
 	if (!request->hasParam("path")) {
 		Log_Println("DOWNLOAD: No path variable set", LOGLEVEL_ERROR);
@@ -1460,16 +1515,16 @@ void explorerHandleDownloadRequest(AsyncWebServerRequest *request) {
 	}
 	// check file exists on SD card
 	param = request->getParam("path");
-	convertFilenameToAscii(param->value(), filePath);
+	const char *filePath = param->value().c_str();
 	if (!gFSystem.exists(filePath)) {
-		Log_Printf(LOGLEVEL_ERROR, "DOWNLOAD:  File not found on SD card: %s", param->value().c_str());
+		Log_Printf(LOGLEVEL_ERROR, "DOWNLOAD:  File not found on SD card: %s", filePath);
 		request->send(404);
 		return;
 	}
 	// check is file and not a directory
 	file = gFSystem.open(filePath);
 	if (file.isDirectory()) {
-		Log_Printf(LOGLEVEL_ERROR, "DOWNLOAD:  Cannot download a directory %s", param->value().c_str());
+		Log_Printf(LOGLEVEL_ERROR, "DOWNLOAD:  Cannot download a directory %s", filePath);
 		request->send(404);
 		file.close();
 		return;
@@ -1503,31 +1558,29 @@ void explorerHandleDownloadRequest(AsyncWebServerRequest *request) {
 // requires a GET parameter path to the file or directory
 void explorerHandleDeleteRequest(AsyncWebServerRequest *request) {
 	File file;
-	char filePath[MAX_FILEPATH_LENTGH];
 	if (request->hasParam("path")) {
 		AsyncWebParameter *param;
 		param = request->getParam("path");
-		convertFilenameToAscii(param->value(), filePath);
+		const char *filePath = param->value().c_str();
 		if (gFSystem.exists(filePath)) {
 			// stop playback, file to delete might be in use
 			Cmd_Action(CMD_STOP);
 			file = gFSystem.open(filePath);
 			if (file.isDirectory()) {
 				if (explorerDeleteDirectory(file)) {
-					Log_Printf(LOGLEVEL_INFO, "DELETE:  %s deleted", param->value().c_str());
+					Log_Printf(LOGLEVEL_INFO, "DELETE:  %s deleted", filePath);
 				} else {
-					Log_Printf(LOGLEVEL_ERROR, "DELETE:  Cannot delete %s", param->value().c_str());
+					Log_Printf(LOGLEVEL_ERROR, "DELETE:  Cannot delete %s", filePath);
 				}
 			} else {
-				const String cPath = filePath;
 				if (gFSystem.remove(filePath)) {
-					Log_Printf(LOGLEVEL_INFO, "DELETE:  %s deleted", param->value().c_str());
+					Log_Printf(LOGLEVEL_INFO, "DELETE:  %s deleted", filePath);
 				} else {
-					Log_Printf(LOGLEVEL_ERROR, "DELETE:  Cannot delete %s", param->value().c_str());
+					Log_Printf(LOGLEVEL_ERROR, "DELETE:  Cannot delete %s", filePath);
 				}
 			}
 		} else {
-			Log_Printf(LOGLEVEL_ERROR, "DELETE:  Path %s does not exist", param->value().c_str());
+			Log_Printf(LOGLEVEL_ERROR, "DELETE:  Path %s does not exist", filePath);
 		}
 	} else {
 		Log_Println("DELETE:  No path variable set", LOGLEVEL_ERROR);
@@ -1541,13 +1594,12 @@ void explorerHandleDeleteRequest(AsyncWebServerRequest *request) {
 void explorerHandleCreateRequest(AsyncWebServerRequest *request) {
 	if (request->hasParam("path")) {
 		AsyncWebParameter *param;
-		char filePath[MAX_FILEPATH_LENTGH];
 		param = request->getParam("path");
-		convertFilenameToAscii(param->value(), filePath);
+		const char *filePath = param->value().c_str();
 		if (gFSystem.mkdir(filePath)) {
-			Log_Printf(LOGLEVEL_INFO, "CREATE:  %s created", param->value().c_str());
+			Log_Printf(LOGLEVEL_INFO, "CREATE:  %s created", filePath);
 		} else {
-			Log_Printf(LOGLEVEL_ERROR, "CREATE:  Cannot create %s", param->value().c_str());
+			Log_Printf(LOGLEVEL_ERROR, "CREATE:  Cannot create %s", filePath);
 		}
 	} else {
 		Log_Println("CREATE:  No path variable set", LOGLEVEL_ERROR);
@@ -1562,20 +1614,18 @@ void explorerHandleRenameRequest(AsyncWebServerRequest *request) {
 	if (request->hasParam("srcpath") && request->hasParam("dstpath")) {
 		AsyncWebParameter *srcPath;
 		AsyncWebParameter *dstPath;
-		char srcFullFilePath[MAX_FILEPATH_LENTGH];
-		char dstFullFilePath[MAX_FILEPATH_LENTGH];
 		srcPath = request->getParam("srcpath");
 		dstPath = request->getParam("dstpath");
-		convertFilenameToAscii(srcPath->value(), srcFullFilePath);
-		convertFilenameToAscii(dstPath->value(), dstFullFilePath);
+		const char *srcFullFilePath = srcPath->value().c_str();
+		const char *dstFullFilePath = dstPath->value().c_str();
 		if (gFSystem.exists(srcFullFilePath)) {
 			if (gFSystem.rename(srcFullFilePath, dstFullFilePath)) {
-				Log_Printf(LOGLEVEL_INFO, "RENAME:  %s renamed to %s", srcPath->value().c_str(), dstPath->value().c_str());
+				Log_Printf(LOGLEVEL_INFO, "RENAME:  %s renamed to %s", srcFullFilePath, dstFullFilePath);
 			} else {
-				Log_Printf(LOGLEVEL_ERROR, "RENAME:  Cannot rename %s", srcPath->value().c_str());
+				Log_Printf(LOGLEVEL_ERROR, "RENAME:  Cannot rename %s", srcFullFilePath);
 			}
 		} else {
-			Log_Printf(LOGLEVEL_ERROR, "RENAME: Path %s does not exist", srcPath->value().c_str());
+			Log_Printf(LOGLEVEL_ERROR, "RENAME: Path %s does not exist", srcFullFilePath);
 		}
 	} else {
 		Log_Println("RENAME: No path variable set", LOGLEVEL_ERROR);
@@ -1593,8 +1643,7 @@ void explorerHandleAudioRequest(AsyncWebServerRequest *request) {
 	uint32_t playMode;
 	if (request->hasParam("path") && request->hasParam("playmode")) {
 		param = request->getParam("path");
-		char filePath[MAX_FILEPATH_LENTGH];
-		convertFilenameToAscii(param->value(), filePath);
+		const char *filePath = param->value().c_str();
 		param = request->getParam("playmode");
 		playModeString = param->value();
 
@@ -1632,36 +1681,26 @@ void handleGetSavedSSIDs(AsyncWebServerRequest *request) {
 }
 
 void handlePostSavedSSIDs(AsyncWebServerRequest *request, JsonVariant &json) {
-	const JsonObject &jsonObj = json.as<JsonObject>();
+	WiFiSettings networkSettings;
 
-	struct WiFiSettings networkSettings;
+	networkSettings.ssid = json["ssid"].as<const char *>();
+	networkSettings.password = json["pwd"].as<const char *>();
 
-	// TODO: we truncate ssid and password, which is better than not checking at all, but still silently failing
-	strncpy(networkSettings.ssid, (const char *) jsonObj["ssid"], 32);
-	networkSettings.ssid[32] = '\0';
-	strncpy(networkSettings.password, (const char *) jsonObj["pwd"], 64);
-	networkSettings.password[64] = '\0';
+	if (json["static"].as<bool>()) {
+		networkSettings.staticIp.addr = json["static_addr"].as<IPAddress>();
+		networkSettings.staticIp.subnet = json["static_subnet"].as<IPAddress>();
+		networkSettings.staticIp.gateway = json["static_gateway"].as<IPAddress>();
+		networkSettings.staticIp.dns1 = json["static_dns1"].as<IPAddress>();
+		networkSettings.staticIp.dns2 = json["static_dns2"].as<IPAddress>();
+	}
 
-	networkSettings.use_static_ip = (bool) jsonObj["static"];
-
-	if (jsonObj.containsKey("static_addr")) {
-		networkSettings.static_addr = (uint32_t) IPAddress().fromString((const char *) jsonObj["static_addr"]);
-	}
-	if (jsonObj.containsKey("static_gateway")) {
-		networkSettings.static_gateway = (uint32_t) IPAddress().fromString((const char *) jsonObj["static_gateway"]);
-	}
-	if (jsonObj.containsKey("static_subnet")) {
-		networkSettings.static_subnet = (uint32_t) IPAddress().fromString((const char *) jsonObj["static_subnet"]);
-	}
-	if (jsonObj.containsKey("static_dns1")) {
-		networkSettings.static_dns1 = (uint32_t) IPAddress().fromString((const char *) jsonObj["static_dns1"]);
-	}
-	if (jsonObj.containsKey("static_dns2")) {
-		networkSettings.static_dns2 = (uint32_t) IPAddress().fromString((const char *) jsonObj["static_dns2"]);
+	if (!networkSettings.isValid()) {
+		// The data was corrupted, so user error
+		request->send(400, "text/plain; charset=utf-8", "error adding network");
+		return;
 	}
 
 	bool succ = Wlan_AddNetworkSettings(networkSettings);
-
 	if (succ) {
 		request->send(200, "text/plain; charset=utf-8", networkSettings.ssid);
 	} else {
@@ -1871,8 +1910,7 @@ static void handlePostRFIDRequest(AsyncWebServerRequest *request, JsonVariant &j
 	if (fileOrUrl.isEmpty()) {
 		fileOrUrl = "0";
 	}
-	char _fileOrUrlAscii[MAX_FILEPATH_LENTGH];
-	convertFilenameToAscii(fileOrUrl, _fileOrUrlAscii);
+	const char *_fileOrUrlAscii = fileOrUrl.c_str();
 	uint8_t _playModeOrModId;
 	if (jsonObj.containsKey("modId")) {
 		_playModeOrModId = jsonObj["modId"];

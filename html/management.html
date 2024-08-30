@@ -6,6 +6,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<link rel="preconnect" href="https://cdnjs.cloudflare.com">
 	<link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+	<link rel="apple-touch-icon" href="/logo">
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/4.6.2/css/bootstrap.min.css">
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/themes/default/style.min.css"/>
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"/>
@@ -22,6 +23,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/i18next/23.7.11/i18next.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/i18next-http-backend/2.4.2/i18nextHttpBackend.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/loc-i18next@0.1.6/dist/umd/loc-i18next.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/gh/sourcefrog/natsort@f8a6b0c/natcompare.js"></script>
 	<style type="text/css">
 		.jstree-default .jstree-search {
 			font-style: italic;
@@ -168,6 +170,7 @@
 	<select class="form-control float-right" style="width:auto;padding-right:25px;" id="langSel" name="langSel">
 		<option value="de">de</option>
 		<option value="en">en</option>
+		<option value="fr">fr</option>
 	</select>
 	</div>
 </nav>
@@ -365,7 +368,7 @@
 							<span class="fas fa-volume-down"></span>
 						</button>
 							<input data-provide="slider" type="number" data-slider-min="1" data-slider-max="21" min="1" max="21" class="form-control" id="setVolume"
-								data-slider-value="" value="" onchange="sendVolume(this.value)">
+								data-slider-value="" value="" onchange="sendVolume(Number(this.value))">
 						<button type="button" class="btn btn-default btn-lg" onclick="sendControl(176)" data-i18n="[title]control.volup">
 							<span class="fas fa-volume-up"></span>
 						</button>
@@ -742,7 +745,19 @@
 
 					</fieldset>
 				</div>
-<br>
+				<br>
+				<div class="form-group col-md-12" id="playlistConfig">
+					<fieldset>
+						<legend class="w-auto" data-i18n="general.playlist.title"></legend>
+						<label for="playlistSortMode" data-i18n="[prepend]general.playlist.sortMode">:</label>
+						<select id="playlistSortMode" name="playlistSortMode" class="form-control">
+							<option value="3" selected data-i18n="general.playlist.strnatcasecmp"></option>
+							<option value="2" data-i18n="general.playlist.strnatcmp"></option>
+							<option value="1" data-i18n="general.playlist.strcmp"></option>
+						</select>
+					</fieldset>
+				</div>
+				<br>
 				<div class="text-center">
 				<button type="reset" class="btn btn-secondary" data-i18n="reset" onclick="resetSettings()"></button>&nbsp
 				<button type="submit" class="btn btn-primary" data-i18n="submit"></button>
@@ -1249,20 +1264,41 @@
 		});
 	}
 
-	function fileNameSort( a, b ) {
-		if ( a.dir && !b.dir ) {
-			return -1
+	// returns the string comparison function based on the sortMode
+	function fileNameSortHelper(sortMode) {
+		return function(a, b) {
+			// Make sure directories are always listed first
+			if ( a.dir && !b.dir ) {
+				return -1
+			}
+			if ( !a.dir && b.dir ) {
+				return 1
+			}
+
+			switch (sortMode) {
+				case 1: // strcmp - standard string comparison
+					if (a.name < b.name) {
+						return -1;
+					}
+					if (a.name > b.name) {
+						return 1;
+					}
+					return 0;
+				case 2: // strnatcmp - natural case-sensitive
+					return natcompare(a.name, b.name);
+					break;
+				case 3: // strnatcasecmp - natural case-insensitive
+				default:
+					return natcompare(a.name.toLowerCase(), b.name.toLowerCase());
+					break;
+			}
 		}
-		if ( !a.dir && b.dir ) {
-			return 1
-		}
-		if ( a.name < b.name ){
-			return -1;
-		}
-		if ( a.name > b.name ){
-			return 1;
-		}
-		return 0;
+	}
+
+	function sortData(data) {
+		const sortMode = window?.settings?.playlist?.sortMode;
+		const fileNameSort = fileNameSortHelper(sortMode);
+		data.sort(fileNameSort);
 	}
 
 	function createChild(nodeId, data) {
@@ -1336,7 +1372,7 @@
 
 	function addFileDirectory(parent, data) {
 
-		data.sort( fileNameSort );
+		sortData(data);
 		var ref = $('#explorerTree').jstree(true);
 
 		for (var i=0; i<data.length; i++) {
@@ -1487,7 +1523,7 @@
 			/* We now have data! */
 			$('#explorerTree').jstree(true).settings.core.data.children = [];
 
-			data.sort( fileNameSort );
+			sortData(data);
 
 
 			for (var i=0; i<data.length; i++) {
@@ -1607,6 +1643,10 @@
 		if (!settings) { 
 			return false 
 		}
+
+		// update global settings
+		window.settings = { ...window.settings, ...settings };
+
 		// general
 		let genSettings = settings.general;
 		if (genSettings) {
@@ -1635,6 +1675,7 @@
 			$('#voltageIndicatorHigh').bootstrapSlider('setValue', defSettings.indicatorHi);
 			$('#voltageCheckInterval').bootstrapSlider('setValue', defSettings.voltageCheckInterval);
 			$('#criticalVoltage').bootstrapSlider('setValue', defSettings.criticalVoltage);
+			$("#playlistSortMode").val(defSettings.sortMode).change();
 		}
 		// wifi
 		let wifiSettings = settings.wifi;
@@ -1653,6 +1694,11 @@
 			document.getElementById('neopixelConfig').setAttribute('data-visible', true);
 			$('#initBrightness').bootstrapSlider('setValue', ledSettings.initBrightness);
 			$('#nightBrightness').bootstrapSlider('setValue', ledSettings.nightBrightness);
+		}
+		// playlist
+		let playlistSettings = settings.playlist;
+		if (playlistSettings) {
+			$("#playlistSortMode").val(playlistSettings.sortMode).change();
 		}
 		// battery
 		let batSettings = settings.battery;
@@ -1930,22 +1976,29 @@
 		lastIdclicked = clickedId;
 		var myObj = {
 			"general": {
-				initVolume: document.getElementById('initialVolume').value,
-				maxVolumeSp: document.getElementById('maxVolumeSpeaker').value,
-				maxVolumeHp: document.getElementById('maxVolumeHeadphone').value, 
-				sleepInactivity: document.getElementById('inactivityTime').value},
+				initVolume: Number(document.getElementById('initialVolume').value),
+				maxVolumeSp: Number(document.getElementById('maxVolumeSpeaker').value),
+				maxVolumeHp: Number(document.getElementById('maxVolumeHeadphone').value), 
+				sleepInactivity: Number(document.getElementById('inactivityTime').value)
+			},
 			"led": {
-				initBrightness: document.getElementById('initBrightness').value,
-				nightBrightness: document.getElementById('nightBrightness').value},
+				initBrightness: Number(document.getElementById('initBrightness').value),
+				nightBrightness: Number(document.getElementById('nightBrightness').value)
+			},
 			"battery": {
-				warnLowVoltage: document.getElementById('warningLowVoltage').value,
-				indicatorLow: document.getElementById('voltageIndicatorLow').value,
-				indicatorHi: document.getElementById('voltageIndicatorHigh').value,
-				criticalVoltage: document.getElementById('criticalVoltage').value,
-				voltageCheckInterval: document.getElementById('voltageCheckInterval').value
+				warnLowVoltage: Number(document.getElementById('warningLowVoltage').value),
+				indicatorLow: Number(document.getElementById('voltageIndicatorLow').value),
+				indicatorHi: Number(document.getElementById('voltageIndicatorHigh').value),
+				criticalVoltage: Number(document.getElementById('criticalVoltage').value),
+				voltageCheckInterval: Number(document.getElementById('voltageCheckInterval').value)
+			},
+			"playlist": {
+				sortMode: Number(document.getElementById('playlistSortMode').value)
 			}
 		};
 		var myJSON = JSON.stringify(myObj);
+		// update global settings
+		window.settings = { ...window.settings, ...myObj };
 		socket.send(myJSON);
 	}
 
@@ -1986,7 +2039,7 @@
 				server: document.getElementById('mqttServer').value,
 				username: document.getElementById('mqttUser').value,
 				password: document.getElementById('mqttPwd').value,
-				port: document.getElementById('mqttPort').value
+				port: Number(document.getElementById('mqttPort').value)
 			}
 		};
 		var myJSON = JSON.stringify(myObj);
@@ -2026,7 +2079,7 @@
 			var myObj = {
 				"rfidMod": {
 					rfidIdMod: document.getElementById('rfidIdMusic').value,
-					modId: document.getElementById('modId').value
+					modId: Number(document.getElementById('modId').value)
 				}
 			};
 		}
@@ -2068,11 +2121,13 @@
 		};
 
 		if (static) {
-			myObj[static_addr] = document.getElementById('static_addr').value;
-			myObj[static_gateway] = document.getElementById('static_gateway').value;
-			myObj[static_subnet] = document.getElementById('static_subnet').value;
-			myObj[static_dns1] = document.getElementById('static_dns1').value;
-			myObj[static_dns2] = document.getElementById('static_dns2').value;
+			myObj = {...myObj,
+				static_addr: document.getElementById('static_addr').value,
+				static_gateway: document.getElementById('static_gateway').value,
+				static_subnet: document.getElementById('static_subnet').value,
+				static_dns1: document.getElementById('static_dns1').value,
+				static_dns2: document.getElementById('static_dns2').value,
+			};
 		}
 
 		await fetch("/savedSSIDs", {
@@ -2100,7 +2155,7 @@
 	function executeCommand() {
 		var myObj = {
 			"controls": {
-				action: document.getElementById('commandId').value
+				action: Number(document.getElementById('commandId').value)
 			}
 		};
 		var myJSON = JSON.stringify(myObj);

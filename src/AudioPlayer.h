@@ -1,5 +1,15 @@
 #pragma once
 
+#ifndef AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT
+	#define AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT playlistSortMode::STRNATCASECMP
+#endif
+
+enum class playlistSortMode : uint8_t {
+	STRCMP = 1,
+	STRNATCMP = 2,
+	STRNATCASECMP = 3,
+};
+
 typedef struct { // Bit field
 	uint8_t playMode : 4; // playMode
 	char **playlist; // playlist
@@ -28,6 +38,7 @@ typedef struct { // Bit field
 	bool lastSpeechActive		 : 1; // If speech-play was active
 	size_t coverFilePos; // current cover file position
 	size_t coverFileSize; // current cover file size
+	size_t audioFileSize; // file size of current audio file
 } playProps;
 
 extern playProps gPlayProperties;
@@ -41,6 +52,9 @@ void AudioPlayer_TrackQueueDispatcher(const char *_itemToPlay, const uint32_t _l
 void AudioPlayer_TrackControlToQueueSender(const uint8_t trackCommand);
 void AudioPlayer_PauseOnMinVolume(const uint8_t oldVolume, const uint8_t newVolume);
 
+playlistSortMode AudioPlayer_GetPlaylistSortMode(void);
+bool AudioPlayer_SetPlaylistSortMode(playlistSortMode value);
+bool AudioPlayer_SetPlaylistSortMode(uint8_t value);
 uint8_t AudioPlayer_GetCurrentVolume(void);
 void AudioPlayer_SetCurrentVolume(uint8_t value);
 uint8_t AudioPlayer_GetMaxVolume(void);

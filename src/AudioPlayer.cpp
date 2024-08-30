@@ -7,6 +7,7 @@
 #include "Bluetooth.h"
 #include "Cmd.h"
 #include "Common.h"
+#include "EnumUtils.h"
 #include "Led.h"
 #include "Log.h"
 #include "MemX.h"
@@ -20,6 +21,7 @@
 #include "Web.h"
 #include "Wlan.h"
 #include "main.h"
+#include "strnatcmp.h"
 
 #include <esp_task_wdt.h>
 #include <freertos/task.h>
@@ -31,6 +33,9 @@
 playProps gPlayProperties;
 TaskHandle_t AudioTaskHandle;
 // uint32_t cnt123 = 0;
+
+// Playlist
+static playlistSortMode AudioPlayer_PlaylistSortMode = AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT;
 
 // Volume
 static uint8_t AudioPlayer_CurrentVolume = AUDIOPLAYER_VOLUME_INIT;
@@ -59,7 +64,9 @@ static uint8_t AudioPlayer_MaxVolumeHeadphone = 11u; // Maximum volume that can 
 static void AudioPlayer_Task(void *parameter);
 static void AudioPlayer_HeadphoneVolumeManager(void);
 static char **AudioPlayer_ReturnPlaylistFromWebstream(const char *_webUrl);
-static int AudioPlayer_ArrSortHelper(const void *a, const void *b);
+static int AudioPlayer_ArrSortHelper_strcmp(const void *a, const void *b);
+static int AudioPlayer_ArrSortHelper_strnatcmp(const void *a, const void *b);
+static int AudioPlayer_ArrSortHelper_strnatcasecmp(const void *a, const void *b);
 static void AudioPlayer_SortPlaylist(char **arr, int n);
 static void AudioPlayer_RandomizePlaylist(char **str, const uint32_t count);
 static size_t AudioPlayer_NvsRfidWriteWrapper(const char *_rfidCardId, const char *_track, const uint32_t _playPosition, const uint8_t _playMode, const uint16_t _trackLastPlayed, const uint16_t _numberOfTracks);
@@ -68,6 +75,9 @@ static void AudioPlayer_ClearCover(void);
 void AudioPlayer_Init(void) {
 	// load playtime total from NVS
 	playTimeSecTotal = gPrefsSettings.getULong("playTimeTotal", 0);
+
+	uint8_t playListSortModeValue = gPrefsSettings.getUChar("PLSortMode", EnumUtils::underlying_value(AudioPlayer_PlaylistSortMode));
+	AudioPlayer_PlaylistSortMode = EnumUtils::to_enum<playlistSortMode>(playListSortModeValue);
 
 #ifndef USE_LAST_VOLUME_AFTER_REBOOT
 	// Get initial volume from NVS
@@ -175,6 +185,20 @@ bool Audio_Detect_Mode_HP(bool _state) {
 #else
 	return !_state;
 #endif
+}
+
+playlistSortMode AudioPlayer_GetPlaylistSortMode(void) {
+	return AudioPlayer_PlaylistSortMode;
+}
+
+bool AudioPlayer_SetPlaylistSortMode(playlistSortMode value) {
+	AudioPlayer_PlaylistSortMode = value;
+	size_t written = gPrefsSettings.putUChar("PLSortMode", EnumUtils::underlying_value(AudioPlayer_PlaylistSortMode));
+	return (written == 1);
+}
+
+bool AudioPlayer_SetPlaylistSortMode(uint8_t value) {
+	return AudioPlayer_SetPlaylistSortMode(EnumUtils::to_enum<playlistSortMode>(value));
 }
 
 uint8_t AudioPlayer_GetCurrentVolume(void) {
@@ -400,13 +424,16 @@ void AudioPlayer_Task(void *parameter) {
 			AudioPlayer_CurrentTime = audio->getAudioCurrentTime();
 			AudioPlayer_FileDuration = audio->getAudioFileDuration();
 			// Calculate relative position in file (for trackprogress neopixel & web-ui)
-			if (!gPlayProperties.playlistFinished && !gPlayProperties.isWebstream) {
-				if (!gPlayProperties.pausePlay && (gPlayProperties.seekmode != SEEK_POS_PERCENT) && (audio->getFileSize() > 0)) { // To progress necessary when paused
-					gPlayProperties.currentRelPos = ((double) (audio->getFilePos() - audio->inBufferFilled()) / (double) audio->getFileSize()) * 100;
+			uint32_t fileSize = audio->getFileSize();
+			gPlayProperties.audioFileSize = fileSize;
+			if (!gPlayProperties.playlistFinished && fileSize > 0) {
+				// for local files and web files with known size
+				if (!gPlayProperties.pausePlay && (gPlayProperties.seekmode != SEEK_POS_PERCENT)) { // To progress necessary when paused
+					gPlayProperties.currentRelPos = ((double) (audio->getFilePos() - audio->getAudioDataStartPos() - audio->inBufferFilled()) / fileSize) * 100;
 				}
 			} else {
-				// calc current fillbuffer percent for webstream
 				if (gPlayProperties.isWebstream && (audio->inBufferSize() > 0)) {
+					// calc current fillbuffer percent for webstream with unknown size/end
 					gPlayProperties.currentRelPos = (double) (audio->inBufferFilled() / (double) audio->inBufferSize()) * 100;
 				} else {
 					gPlayProperties.currentRelPos = 0;
@@ -789,13 +816,20 @@ void AudioPlayer_Task(void *parameter) {
 			gPlayProperties.tellMode = TTS_NONE;
 			String ipText = Wlan_GetIpAddress();
 			bool speechOk;
-#if (LANGUAGE == DE)
-			ipText.replace(".", "Punkt"); // make IP as text (replace thousand separator)
-			speechOk = audio->connecttospeech(ipText.c_str(), "de");
-#else
-			ipText.replace(".", "point");
-			speechOk = audio->connecttospeech(ipText.c_str(), "en");
-#endif
+			// make IP as text (replace thousand separator with locale text)
+			switch (LANGUAGE) {
+				case DE:
+					ipText.replace(".", "Punkt");
+					speechOk = audio->connecttospeech(ipText.c_str(), "de");
+					break;
+				case FR:
+					ipText.replace(".", "point");
+					speechOk = audio->connecttospeech(ipText.c_str(), "fr");
+					break;
+				default:
+					ipText.replace(".", "point");
+					speechOk = audio->connecttospeech(ipText.c_str(), "en");
+			}
 			if (!speechOk) {
 				System_IndicateError();
 			}
@@ -1209,14 +1243,41 @@ void AudioPlayer_RandomizePlaylist(char **str, const uint32_t count) {
 	}
 }
 
-// Helper to sort playlist alphabetically
-static int AudioPlayer_ArrSortHelper(const void *a, const void *b) {
+// Helper to sort playlist - standard string comparison
+static int AudioPlayer_ArrSortHelper_strcmp(const void *a, const void *b) {
 	return strcmp(*(const char **) a, *(const char **) b);
 }
 
-// Sort playlist alphabetically
+// Helper to sort playlist - natural case-sensitive
+static int AudioPlayer_ArrSortHelper_strnatcmp(const void *a, const void *b) {
+	return strnatcmp(*(const char **) a, *(const char **) b);
+}
+
+// Helper to sort playlist - natural case-insensitive
+static int AudioPlayer_ArrSortHelper_strnatcasecmp(const void *a, const void *b) {
+	return strnatcasecmp(*(const char **) a, *(const char **) b);
+}
+
+// Sort playlist
 void AudioPlayer_SortPlaylist(char **arr, int n) {
-	qsort(arr, n, sizeof(const char *), AudioPlayer_ArrSortHelper);
+	__compar_fn_t cmpFunc;
+	switch (AudioPlayer_PlaylistSortMode) {
+		case playlistSortMode::STRCMP:
+			cmpFunc = AudioPlayer_ArrSortHelper_strcmp; // standard string comparison
+			Log_Printf(LOGLEVEL_INFO, "using strcmp");
+			break;
+		case playlistSortMode::STRNATCMP:
+			cmpFunc = AudioPlayer_ArrSortHelper_strnatcmp; // natural case-sensitive
+			Log_Printf(LOGLEVEL_INFO, "using strnatcmp");
+			break;
+		case playlistSortMode::STRNATCASECMP:
+		default:
+			cmpFunc = AudioPlayer_ArrSortHelper_strnatcasecmp; // natural case-insensitive
+			Log_Printf(LOGLEVEL_INFO, "using strnatcasecmp");
+			break;
+	}
+
+	qsort(arr, n, sizeof(const char *), cmpFunc);
 }
 
 // Clear cover send notification

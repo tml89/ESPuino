@@ -2,6 +2,19 @@
 
 ## DEV-branch
 
+* 12.02.2024: Use natural sort (#296), thanks to @freddy36 !
+* 09.02.2024: Remove explorerCreateParentDirectories (#301), thanks to @freddy36 !
+* 08.02.2024: Remove convertFilenameToAscii (#298), Playlist fixes (#299), thanks to @freddy36 !
+* 08.02.2024: Apple touch icon
+* 07.02.2024: Fix dangling pointer in explorerHandleFileStorageTask (#297), thanks to @freddy36 !
+* 07.02.2024: Reduce WiFi memory consumption (#295), thanks to @laszloh !
+* 05.02.2024: Increase JSON buffer for /debug endpoint
+* 02.02.2024: Improve progress calculation/indication, thanks to @freddy36 !
+* 01.02.2024: Use NVS interator when reading RFID keys, save 4KB RAM , thanks to @laszloh !
+* 01.02.2024: Use dynamically allocated buffer for file upload, save 32KB RAM , thanks to @laszloh !
+* 30.01.2024: Add French Language (#292), thanks to @damda58 !
+* 30.01.2024: Fix some audio dropouts with high-quality OPUS files
+* 30.01.2024: Keep original mtime for gzip compressed files, avoiding uneccesary Web.o rebuilds (#293), thanks to @freddy36 !
 * 23.01.2024: Updated documentation on LPCD setting, thanks to @derpicknicker1 !
 * 21.01.2024: Build (tag 2.2) is broken when NEOPIXEL_ENABLE is not set #289, thanks to @RolinBert !
 * 21.01.2024: PN5180: Save about 500 Bytes of RAM

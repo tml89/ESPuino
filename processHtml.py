@@ -34,7 +34,8 @@ BINARY_FILES =[
     Path("js/i18nextHttpBackend.min.js"),
     Path("js/loc_i18next.min.js"),
     Path("locales/de.json"),
-    Path("locales/en.json")
+    Path("locales/en.json"),
+    Path("locales/fr.json")
 ]
 
 
@@ -81,8 +82,11 @@ class HtmlHeaderProcessor:
             with binary_path.open(mode="r", encoding="utf-8") as f:
                 content = f.read()
 
+        # get status of the file (copy modified time to gzip header)
+        stinfo = os.stat(binary_path)
+
         # compress content
-        data = gzip.compress(content.encode())
+        data = gzip.compress(content.encode(), mtime=stinfo.st_mtime)
 
         with header_path.open(mode="a", encoding="utf-8") as header_file:
             varName = binary_path.name.split('.')[0]
