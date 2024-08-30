@@ -366,9 +366,6 @@ void AudioPlayer_Task(void *parameter) {
 		audio->setTone(3, 0, 0);
 	}
 
-	// EmmaBox spezific
-	audio->setTone(0, 5, 6);
-
 	uint8_t currentVolume;
 	static BaseType_t trackQStatus;
 	static uint8_t trackCommand = NO_ACTION;
@@ -427,6 +424,18 @@ void AudioPlayer_Task(void *parameter) {
 				gPlayProperties.pausePlay = false;
 				gPlayProperties.trackFinished = false;
 				gPlayProperties.playlistFinished = false;
+
+				// EmmaBox spezific
+				if (gPlayProperties.playMode == AUDIOBOOK|| gPlayProperties.playMode == AUDIOBOOK_LOOP )
+				{
+					audio->setTone(-10, -5, 6);
+					Log_Printf(LOGLEVEL_DEBUG, "Audio zu: Hörbuch");
+				}
+				else
+				{
+					audio->setTone(0, 5, 6);
+					Log_Printf(LOGLEVEL_DEBUG, "Audio zu Party");
+				}	
 
 #ifdef MQTT_ENABLE
 				publishMqtt(topicPlaymodeState, gPlayProperties.playMode, false);
