@@ -49,27 +49,18 @@ bool testSPIRAM(void) {
 	return true;
 }
 
-#ifdef PLAY_LAST_RFID_AFTER_REBOOT
 bool recoverLastRfid = true;
 bool recoverBootCount = true;
 bool resetBootCount = false;
 uint32_t bootCount = 0;
-#endif
 
 ////////////
-
-#if (HAL == 2)
-	#include "AC101.h"
-static TwoWire i2cBusOne = TwoWire(0);
-static AC101 ac(&i2cBusOne);
-#endif
 
 // I2C
 #ifdef I2C_2_ENABLE
 TwoWire i2cBusTwo = TwoWire(1);
 #endif
 
-#ifdef PLAY_LAST_RFID_AFTER_REBOOT
 // If a problem occurs, remembering last rfid can lead into a boot loop that's hard to escape of.
 // That reason for a mechanism is necessary to prevent this.
 // At start of a boot, bootCount is incremented by one and after 30s decremented because
@@ -120,7 +111,6 @@ void recoverLastRfidPlayedFromNvs(bool force) {
 		}
 	}
 }
-#endif
 
 void setup() {
 	Log_Init();
@@ -128,7 +118,9 @@ void setup() {
 
 	// Make sure all wakeups can be enabled *before* initializing RFID, which can enter sleep immediately
 	Button_Init(); // To preseed internal button-storage with values
+
 #ifdef PN5180_ENABLE_LPCD
+	System_Init_LPCD();
 	Rfid_Init();
 #endif
 
@@ -159,25 +151,7 @@ void setup() {
 	// All checks that could send us to sleep are done, power up fully
 	Power_PeripheralOn();
 
-	memset(&gPlayProperties, 0, sizeof(gPlayProperties));
-	gPlayProperties.playlistFinished = true;
-
 	Led_Init();
-
-// Only used for ESP32-A1S-Audiokit
-#if (HAL == 2)
-	i2cBusOne.begin(IIC_DATA, IIC_CLK, 40000);
-
-	while (not ac.begin()) {
-		Log_Println("AC101 Failed!", LOGLEVEL_ERROR);
-		delay(1000);
-	}
-	Log_Println("AC101 via I2C - OK!", LOGLEVEL_NOTICE);
-
-	pinMode(22, OUTPUT);
-	digitalWrite(22, HIGH);
-	ac.SetVolumeHeadphone(80);
-#endif
 
 	// Needs power first
 	SdCard_Init();
@@ -197,7 +171,6 @@ void setup() {
 	SdCard_PrintInfo();
 
 	Ftp_Init();
-	Mqtt_Init();
 #ifndef PN5180_ENABLE_LPCD
 	#if defined(RFID_READER_TYPE_MFRC522_SPI) || defined(RFID_READER_TYPE_MFRC522_I2C) || defined(RFID_READER_TYPE_PN5180)
 	Rfid_Init();
@@ -205,6 +178,7 @@ void setup() {
 #endif
 	RotaryEncoder_Init();
 	Wlan_Init();
+	Mqtt_Init();
 	Bluetooth_Init();
 
 	if (OPMODE_NORMAL == System_GetOperationMode()) {
@@ -256,7 +230,6 @@ void loop() {
 		Web_Cyclic();
 		Ftp_Cyclic();
 		RotaryEncoder_Cyclic();
-		Mqtt_Cyclic();
 	}
 	vTaskDelay(portTICK_PERIOD_MS * 1u);
 	AudioPlayer_Cyclic();
@@ -268,10 +241,17 @@ void loop() {
 	System_Cyclic();
 	Rfid_PreferenceLookupHandler();
 
+	bool playLastRfidAfterReboot;
 #ifdef PLAY_LAST_RFID_AFTER_REBOOT
-	recoverBootCountFromNvs();
-	recoverLastRfidPlayedFromNvs();
+	playLastRfidAfterReboot = gPrefsSettings.getBool("playLastOnBoot", true);
+#else
+	playLastRfidAfterReboot = gPrefsSettings.getBool("playLastOnBoot", false);
 #endif
+
+	if (playLastRfidAfterReboot) {
+		recoverBootCountFromNvs();
+		recoverLastRfidPlayedFromNvs();
+	}
 
 	IrReceiver_Cyclic();
 	vTaskDelay(portTICK_PERIOD_MS * 2u);

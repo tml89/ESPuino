@@ -6,6 +6,7 @@
 #include "AudioPlayer.h"
 #include "Log.h"
 #include "MemX.h"
+#include "Mqtt.h"
 #include "RotaryEncoder.h"
 #include "System.h"
 #include "Web.h"
@@ -14,7 +15,6 @@
 
 #include <DNSServer.h>
 #include <ESPmDNS.h>
-#include <FastLED.h>
 #include <WiFi.h>
 #include <list>
 #include <nvs.h>
@@ -113,6 +113,22 @@ static bool storeWiFiSettingsToNvs(const char *key, const WiFiSettings &s) {
  * @param handler The function to be called, it receives the key and the WiFiSettings object loaded from NVS
  */
 static void iterateNvsEntries(std::function<bool(const char *, const WiFiSettings &)> handler) {
+#if (defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3))
+	nvs_iterator_t it = nullptr;
+	esp_err_t res = nvs_entry_find("nvs", nvsWiFiNamespace, NVS_TYPE_BLOB, &it);
+	while (res == ESP_OK) {
+		nvs_entry_info_t info;
+		nvs_entry_info(it, &info);
+		// some basic sanity check
+		if (strncmp(info.key, nvsWiFiKey, strlen(nvsWiFiKey)) == 0) {
+			if (!handler(info.key, loadWiFiSettingsFromNvs(info.key))) {
+				// handler requested an abort
+				return;
+			}
+		}
+		res = nvs_entry_next(&it);
+	}
+#else
 	nvs_iterator_t it = nvs_entry_find("nvs", nvsWiFiNamespace, NVS_TYPE_BLOB);
 	while (it) {
 		nvs_entry_info_t info;
@@ -127,6 +143,7 @@ static void iterateNvsEntries(std::function<bool(const char *, const WiFiSetting
 		}
 		it = nvs_entry_next(it);
 	}
+#endif
 }
 
 /**
@@ -216,7 +233,7 @@ static void migrateFromVersion2() {
 		}
 
 		// clean up old nvs entries
-		delete settings;
+		std::destroy_at(settings);
 		gPrefsSettings.remove(nvsKey);
 	}
 }
@@ -255,6 +272,12 @@ void Wlan_Init(void) {
 			ipMode = buffer;
 		}
 		Log_Printf(LOGLEVEL_DEBUG, "SSID: %s, Password: %s, %s", s.ssid.c_str(), (s.password.length()) ? "yes" : "no", ipMode);
+
+		if (gPrefsSettings.isKey("LAST_SSID") == false) {
+			gPrefsSettings.putString("LAST_SSID", s.ssid);
+			Log_Println("Warn: using saved SSID as LAST_SSID", LOGLEVEL_NOTICE);
+		}
+
 		return true;
 	});
 
@@ -270,7 +293,7 @@ void Wlan_Init(void) {
 	handleWifiStateInit();
 }
 
-void connectToKnownNetwork(const WiFiSettings &settings, uint8_t *bssid = nullptr) {
+void connectToKnownNetwork(const WiFiSettings &settings, const uint8_t *bssid = nullptr) {
 	// set hostname on connect, because when resetting wifi config elsewhere it could be reset
 	const String hostname = getHostname();
 	if (hostname) {
@@ -284,7 +307,7 @@ void connectToKnownNetwork(const WiFiSettings &settings, uint8_t *bssid = nullpt
 		}
 	}
 
-	Log_Printf(LOGLEVEL_NOTICE, wifiConnectionInProgress, settings.ssid);
+	Log_Printf(LOGLEVEL_NOTICE, wifiConnectionInProgress, settings.ssid.c_str());
 
 	WiFi.begin(settings.ssid, settings.password, 0, bssid);
 }
@@ -473,15 +496,23 @@ void handleWifiStateConnectionSuccess() {
 	delete dnsServer;
 	dnsServer = nullptr;
 
+	bool playLastRfidAfterReboot;
 #ifdef PLAY_LAST_RFID_AFTER_REBOOT
-	if (gPlayLastRfIdWhenWiFiConnected && gTriedToConnectToHost) {
+	playLastRfidAfterReboot = gPrefsSettings.getBool("playLastOnBoot", true);
+#else
+	playLastRfidAfterReboot = gPrefsSettings.getBool("playLastOnBoot", false);
+#endif
+
+	if (playLastRfidAfterReboot && gPlayLastRfIdWhenWiFiConnected && gTriedToConnectToHost) {
 		gPlayLastRfIdWhenWiFiConnected = false;
 		recoverLastRfidPlayedFromNvs(true);
 	}
-#endif
 
 	wifiState = WIFI_STATE_CONNECTED;
+	Mqtt_OnWifiConnected();
 }
+
+unsigned long lastRssiTimestamp;
 
 void handleWifiStateConnected() {
 	static int8_t lastRssiValue = 0;
@@ -501,13 +532,17 @@ void handleWifiStateConnected() {
 			break;
 	}
 
-	static CEveryNSeconds printRssiValue(60);
-	if (printRssiValue) {
+	if ((millis() - lastRssiTimestamp) > 60000u) {
+		// print RSSI every 60 seconds
+		lastRssiTimestamp = millis();
 		// show RSSI value only if it has changed by > 3 dBm
 		if (abs(lastRssiValue - Wlan_GetRssi()) > 3) {
 			Log_Printf(LOGLEVEL_DEBUG, "RSSI: %d dBm", Wlan_GetRssi());
 			lastRssiValue = Wlan_GetRssi();
 		}
+#ifdef MQTT_ENABLE
+		publishMqtt(topicWiFiRssiState, static_cast<int32_t>(Wlan_GetRssi()), false);
+#endif
 	}
 }
 
@@ -666,6 +701,10 @@ const String Wlan_GetCurrentSSID() {
 
 const String Wlan_GetHostname() {
 	return gPrefsSettings.getString("Hostname", "ESPuino");
+}
+
+const String Wlan_GetMacAddress() {
+	return WiFi.macAddress();
 }
 
 bool Wlan_DeleteNetwork(String ssid) {

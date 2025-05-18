@@ -1,5 +1,9 @@
 #pragma once
 
+#include "Playlist.h"
+
+#include <optional>
+
 #ifndef AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT
 	#define AUDIOPLAYER_PLAYLIST_SORT_MODE_DEFAULT playlistSortMode::STRNATCASECMP
 #endif
@@ -12,12 +16,11 @@ enum class playlistSortMode : uint8_t {
 
 typedef struct { // Bit field
 	uint8_t playMode : 4; // playMode
-	char **playlist; // playlist
+	Playlist *playlist; // playlist
 	char title[255]; // current title
 	bool repeatCurrentTrack		: 1; // If current track should be looped
 	bool repeatPlaylist			: 1; // If whole playlist should be looped
 	uint16_t currentTrackNumber : 9; // Current tracknumber
-	uint16_t numberOfTracks		: 9; // Number of tracks in playlist
 	unsigned long startAtFilePos; // Offset to start play (in bytes)
 	double currentRelPos; // Current relative playPosition (in %)
 	bool sleepAfterCurrentTrack : 1; // If uC should go to sleep after current track
@@ -36,6 +39,13 @@ typedef struct { // Bit field
 	uint8_t tellMode			 : 2; // Tell mode for text to speech announcments
 	bool currentSpeechActive	 : 1; // If speech-play is active
 	bool lastSpeechActive		 : 1; // If speech-play was active
+	bool SavePlayPosRfidChange	 : 1; // Save last play-position
+	bool pauseOnMinVolume		 : 1; // When playback is active and volume is changed to zero, playback is paused automatically.
+	bool pauseIfRfidRemoved		 : 1; // When playback is active and RFID is removed, playback is paused automatically.
+	bool dontAcceptRfidTwice	 : 1; // RFID-reader doesn't accept the same RFID-tag twice in a row (unless it's a modification-card or RFID-tag is unknown in NVS). Flag will be ignored silently if PAUSE_WHEN_RFID_REMOVED is active. (https://forum.espuino.de/t/neues-feature-dont-accept-same-rfid-twice/1247)
+	int8_t gainLowPass = 0; // Low Pass for EQ Control
+	int8_t gainBandPass = 0; // Band Pass for EQ Control
+	int8_t gainHighPass = 0; // High Pass for EQ Control
 	size_t coverFilePos; // current cover file position
 	size_t coverFileSize; // current cover file size
 	size_t audioFileSize; // file size of current audio file
@@ -48,6 +58,7 @@ void AudioPlayer_Exit(void);
 void AudioPlayer_Cyclic(void);
 uint8_t AudioPlayer_GetRepeatMode(void);
 void AudioPlayer_VolumeToQueueSender(const int32_t _newVolume, bool reAdjustRotary);
+void AudioPlayer_EqualizerToQueueSender(const int8_t gainLowPass, const int8_t gainBandPass, const int8_t gainHighPass);
 void AudioPlayer_TrackQueueDispatcher(const char *_itemToPlay, const uint32_t _lastPlayPos, const uint32_t _playMode, const uint16_t _trackLastPlayed);
 void AudioPlayer_TrackControlToQueueSender(const uint8_t trackCommand);
 void AudioPlayer_PauseOnMinVolume(const uint8_t oldVolume, const uint8_t newVolume);
