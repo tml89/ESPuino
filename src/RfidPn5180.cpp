@@ -198,7 +198,7 @@ void Rfid_Task(void *parameter) {
 			//
 			// default factory password for ICODE-SLIX2 is {0x0F, 0x0F, 0x0F, 0x0F}
 			//
-			uint8_t password[] = {0x0F, 0x0F, 0x0F, 0x0F};
+			uint8_t password[] = {0x5B, 0x6E, 0x7D, 0x7F};
 			ISO15693ErrorCode myrc = nfc15693.disablePrivacyMode(password);
 			if (ISO15693_EC_OK == myrc) {
 				if (showDisablePrivacyNotification) {
