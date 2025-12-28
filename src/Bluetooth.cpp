@@ -11,10 +11,11 @@
 #include <AudioPlayer.h>
 
 #ifdef BLUETOOTH_ENABLE
-	#include "esp_bt.h"
 	#include "BluetoothA2DPCommon.h"
 	#include "BluetoothA2DPSink.h"
 	#include "BluetoothA2DPSource.h"
+	#include "esp_bt.h"
+	#include "esp_heap_caps.h"
 	#if (defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3))
 		#include "ESP_I2S.h"
 I2SClass i2s;
@@ -77,17 +78,17 @@ void button_handler(uint8_t id, bool isReleased) {
 			case 68:
 				// 70=pause, 68=resume
 				Log_Printf(LOGLEVEL_DEBUG, "Bluetooth button id %u (pause/resume) is released.", id);
-				AudioPlayer_TrackControlToQueueSender(PAUSEPLAY);
+				AudioPlayer_SetTrackControl(PAUSEPLAY);
 				break;
 			case 75:
 				// 75=next
 				Log_Printf(LOGLEVEL_DEBUG, "Bluetooth button id %u (next track) is released.", id);
-				AudioPlayer_TrackControlToQueueSender(NEXTTRACK);
+				AudioPlayer_SetTrackControl(NEXTTRACK);
 				break;
 			case 76:
 				// 76=previous
 				Log_Printf(LOGLEVEL_DEBUG, "Bluetooth button id %u (previous track) is released.", id);
-				AudioPlayer_TrackControlToQueueSender(PREVIOUSTRACK);
+				AudioPlayer_SetTrackControl(PREVIOUSTRACK);
 				break;
 			default:
 				// unknown/unsupported button id
@@ -142,6 +143,9 @@ void avrc_metadata_callback(uint8_t id, const uint8_t *text) {
 // feed the A2DP source with audio data
 int32_t get_data_channels(Frame *frame, int32_t channel_len) {
 	if (channel_len < 0 || frame == NULL) {
+		return 0;
+	}
+	if (audioSourceRingBuffer == NULL) {
 		return 0;
 	}
 	// Receive data from ring buffer
@@ -201,7 +205,7 @@ void Bluetooth_VolumeChanged(int _newVolume) {
 	_volume = map(_newVolume, 0, 0x7F, BLUETOOTHPLAYER_VOLUME_MIN, BLUETOOTHPLAYER_VOLUME_MAX);
 	if (AudioPlayer_GetCurrentVolume() != _volume) {
 		Log_Printf(LOGLEVEL_INFO, "Bluetooth => volume changed:  %d !", _volume);
-		AudioPlayer_VolumeToQueueSender(_volume, true);
+		AudioPlayer_SetVolume(_volume, true);
 	}
 #endif
 }
@@ -227,7 +231,7 @@ void Bluetooth_Init(void) {
 			.bck_io_num = I2S_BCLK,
 			.ws_io_num = I2S_LRC,
 			.data_out_num = I2S_DOUT,
-			.data_in_num = I2S_PIN_NO_CHANGE
+			.data_in_num = I2S_PIN_NO_CHANGE,
 		};
 		a2dp_sink->set_pin_config(pin_config);
 	#endif
@@ -247,11 +251,9 @@ void Bluetooth_Init(void) {
 		a2dp_sink->set_avrc_metadata_callback(avrc_metadata_callback);
 		a2dp_sink->set_on_volumechange(Bluetooth_VolumeChanged);
 	} else if (System_GetOperationMode() == OPMODE_BLUETOOTH_SOURCE) {
-		// create audio source ringbuffer on demand
-		audioSourceRingBuffer = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
-		if (audioSourceRingBuffer == NULL) {
-			Log_Println("cannot create audioSourceRingBuffer!", LOGLEVEL_ERROR);
-		}
+		// Ringbuffer will be allocated on first use (lazy initialization)
+		audioSourceRingBuffer = NULL;
+
 		//  setup BT source
 		a2dp_source = new BluetoothA2DPSource();
 
@@ -357,10 +359,45 @@ void Bluetooth_SetVolume(const int32_t _newVolume, bool reAdjustRotary) {
 #endif
 }
 
-bool Bluetooth_Source_SendAudioData(int16_t *outBuff, uint16_t validSamples) {
+bool Bluetooth_Source_SendAudioData(int16_t *outBuff, int32_t validSamples) {
 #ifdef BLUETOOTH_ENABLE
-	// send audio data to ringbuffer
+	// Lazy initialization: create ringbuffer on first use to save heap memory
 	if ((System_GetOperationMode() == OPMODE_BLUETOOTH_SOURCE) && (a2dp_source) && (validSamples > 0) && a2dp_source->is_connected()) {
+		// Create ringbuffer on first use (lazy initialization)
+		if (audioSourceRingBuffer == NULL) {
+	#ifdef BOARD_HAS_PSRAM
+			if (psramFound()) {
+				// Allocate ringbuffer storage in PSRAM
+				size_t bufferSize = 8192;
+				StaticRingbuffer_t *bufferStruct = (StaticRingbuffer_t *) heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_SPIRAM);
+				uint8_t *bufferStorage = (uint8_t *) heap_caps_malloc(bufferSize, MALLOC_CAP_SPIRAM);
+
+				if (bufferStruct != NULL && bufferStorage != NULL) {
+					audioSourceRingBuffer = xRingbufferCreateStatic(bufferSize, RINGBUF_TYPE_BYTEBUF, bufferStorage, bufferStruct);
+					Log_Printf(LOGLEVEL_INFO, "Bluetooth => audioSourceRingBuffer created in PSRAM on demand (%d bytes, free heap: %u Bytes)", bufferSize, ESP.getFreeHeap());
+				} else {
+					Log_Println("Failed to allocate PSRAM for audioSourceRingBuffer, using heap", LOGLEVEL_ERROR);
+					if (bufferStruct) {
+						heap_caps_free(bufferStruct);
+					}
+					if (bufferStorage) {
+						heap_caps_free(bufferStorage);
+					}
+					audioSourceRingBuffer = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
+				}
+			} else
+	#endif
+			{
+				audioSourceRingBuffer = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
+				Log_Printf(LOGLEVEL_INFO, "Bluetooth => audioSourceRingBuffer created in heap on demand (Free heap: %u Bytes)", ESP.getFreeHeap());
+			}
+
+			if (audioSourceRingBuffer == NULL) {
+				Log_Println("Failed to create audioSourceRingBuffer!", LOGLEVEL_ERROR);
+				return false;
+			}
+		}
+
 		return (pdTRUE == xRingbufferSend(audioSourceRingBuffer, outBuff, sizeof(uint32_t) * validSamples, (TickType_t) portMAX_DELAY));
 	} else {
 		return false;

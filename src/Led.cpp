@@ -18,8 +18,6 @@
 #include <esp_task_wdt.h>
 
 #ifdef NEOPIXEL_ENABLE
-	#include <FastLED.h>
-
 	#define LED_INDICATOR_SET(indicator)	((Led_Indicators) |= (1u << ((uint8_t) indicator)))
 	#define LED_INDICATOR_IS_SET(indicator) (((Led_Indicators) & (1u << ((uint8_t) indicator))) > 0u)
 	#define LED_INDICATOR_CLEAR(indicator)	((Led_Indicators) &= ~(1u << ((uint8_t) indicator)))
@@ -108,7 +106,7 @@ bool Led_LoadSettings(LedSettings &settings) {
 
 	// get reverse rotation from NVS
 	#ifdef NEOPIXEL_REVERSE_ROTATION
-	const bool defReverseRotation = NEOPIXEL_REVERSE_ROTATION;
+	const bool defReverseRotation = true;
 	#else
 	const bool defReverseRotation = false;
 	#endif
@@ -154,7 +152,7 @@ void Led_Init(void) {
 	xTaskCreatePinnedToCore(
 		Led_Task, /* Function to implement the task */
 		"Led_Task", /* Name of the task */
-		2048, /* Stack size in words */
+		3072, /* Stack size in words */ // 20251015: increased to 3072 because saving of "allgemeine Einstellungen" let to restarts because of stack overflows
 		NULL, /* Task input parameter */
 		1, /* Priority of the task */
 		&Led_TaskHandle, /* Task handle. */
@@ -359,6 +357,7 @@ static void Led_Task(void *parameter) {
 	FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, numIndicatorLeds + numControlLeds).setCorrection(TypicalSMD5050);
 	FastLED.setBrightness(gLedSettings.Led_Brightness);
 	FastLED.setDither(DISABLE_DITHER);
+	FastLED.setMaxRefreshRate(200); // limit LED refresh rate to 200Hz (less likely to cause flickering)
 
 	LedAnimationType activeAnimation = LedAnimationType::NoNewAnimation;
 	LedAnimationType nextAnimation = LedAnimationType::NoNewAnimation;
@@ -425,7 +424,7 @@ static void Led_Task(void *parameter) {
 			nextAnimation = LedAnimationType::Idle;
 		} else if (gPlayProperties.pausePlay && !gPlayProperties.isWebstream) {
 			nextAnimation = LedAnimationType::Pause;
-		} else if ((gPlayProperties.playMode != BUSY) && (gPlayProperties.playMode != NO_PLAYLIST) && gPlayProperties.audioFileSize > 0) { // progress for a file/stream with known size
+		} else if ((gPlayProperties.playMode != BUSY) && (gPlayProperties.playMode != NO_PLAYLIST) && gPlayProperties.audioFileDuration > 0) { // progress for a file/stream with known size
 			nextAnimation = LedAnimationType::Progress;
 		} else if (gPlayProperties.isWebstream) { // webstream animation (for streams with unknown size); pause animation is also handled by the webstream animation function
 			nextAnimation = LedAnimationType::Webstream;
@@ -537,6 +536,9 @@ static void Led_Task(void *parameter) {
 		// get the time to wait and delay the task
 		if ((animationTimer > 0) && (animationTimer < taskDelay)) {
 			taskDelay = animationTimer;
+			if (taskDelay < 5) {
+				taskDelay = 5; // minimum delay
+			}
 		}
 		animationTimer -= taskDelay;
 		vTaskDelay(portTICK_PERIOD_MS * taskDelay);

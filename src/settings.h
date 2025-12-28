@@ -12,25 +12,24 @@
 
 	//################## HARDWARE-PLATFORM ###############################
 	/* Make sure to also edit the configfile, that is specific for your platform.
-	If in doubts (your develboard is not listed) use HAL 7
+	If in doubts (your board is not listed) use HAL 7
 
 	!!!Only ESP32 with PSRAM are supported!!!
 
-	1: Wemos Lolin32                        => REMOVED (because of missing PSRAM)
-	2: ESP32-A1S Audiokit                   => REMOVED (because of stale development, lack of users and lack of GPIOs)
-	3: Wemos Lolin D32                      => REMOVED (because of missing PSRAM)
-	4: Wemos Lolin D32 pro                  => settings-lolin_D32_pro.h
-	5: Lilygo T8 (V1.7)                     => settings-ttgo_t8.h
-	6: ESPuino complete                     => settings-complete.h
-	7: Lolin D32 pro SDMMC Port-Expander    => settings-lolin_d32_pro_sdmmc_pe.h
-	8: AZDelivery ESP32 NodeMCU             => REMOVED (because of missing PSRAM)
-	9: Lolin D32 SDMMC Port-Expander        => REMOVED (because of missing PSRAM)
-	99: custom                              => settings-custom.h
+	HAL 4: Wemos Lolin D32 pro                  => settings-lolin_D32_pro.h
+	HAL 5: Lilygo T8 (V1.7)                     => settings-ttgo_t8.h
+	HAL 6: ESPuino complete                     => settings-complete.h
+	HAL 7: Lolin D32 pro SDMMC Port-Expander    => settings-lolin_d32_pro_sdmmc_pe.h
+	HAL 99: custom                              => settings-custom.h
 	*/
 	#ifndef HAL             // Will be set by platformio.ini. There's no need to adjust this manually right here
 		#define HAL 7
 	#endif
 
+	// Enforce port expander for some HALs because it's mandatory for those and users constantly forget it. Endless story...
+	#if (HAL == 6) || (HAL == 7)
+		#define PORT_EXPANDER_ENABLE 
+	#endif
 
 	//########################## MODULES #################################
 	#define PORT_EXPANDER_ENABLE          // When enabled, buttons can be connected via port-expander PCA9555 (https://forum.espuino.de/t/einsatz-des-port-expanders-pca9555/306)
@@ -40,7 +39,7 @@
 	#define FTP_ENABLE                      // Enables FTP-server; DON'T FORGET TO ACTIVATE AFTER BOOT BY PRESSING PAUSE + NEXT-BUTTONS (IN PARALLEL)!
 	#define NEOPIXEL_ENABLE                 // Don't forget configuration of NUM_LEDS if enabled
 	//#define NEOPIXEL_REVERSE_ROTATION     // Some Neopixels are adressed/soldered counter-clockwise. This can be configured here.
-	#define LANGUAGE DE                     // DE = deutsch; EN = english
+	#define LANGUAGE DE                     // DE = deutsch; EN = english: FR = french
 	//#define STATIC_IP_ENABLE              // DEPRECATED: Enables static IP-configuration (change static ip-section accordingly)
 	//#define HEADPHONE_ADJUST_ENABLE         // Used to adjust (lower) volume for optional headphone-pcb (refer maxVolumeSpeaker / maxVolumeHeadphone) and to enable stereo (if PLAY_MONO_SPEAKER is set)
 	#define PLAY_MONO_SPEAKER             // If only one speaker is used enabling mono should make sense. Please note: headphones is always stereo (if HEADPHONE_ADJUST_ENABLE is active)
@@ -232,10 +231,10 @@
 
 	#ifdef MEASURE_BATTERY_VOLTAGE
 		// (optional) Default-voltages for battery-monitoring via Neopixel; can be changed later via WebGUI
-		constexpr float s_warningLowVoltage = 3.4;                      // If battery-voltage is <= this value, a cyclic warning will be indicated by Neopixel (can be changed via GUI!)
-		constexpr float s_warningCriticalVoltage = 3.1;                 // If battery-voltage is <= this value, assume battery near-empty. Set to 0V to disable.
-		constexpr float s_voltageIndicatorLow = 3.0;                    // Lower range for Neopixel-voltage-indication (0 leds) (can be changed via GUI!)
-		constexpr float s_voltageIndicatorHigh = 4.2;                   // Upper range for Neopixel-voltage-indication (all leds) (can be changed via GUI!)
+		constexpr float s_warningLowVoltage = 3.0;                      // If battery-voltage is <= this value, a cyclic warning will be indicated by Neopixel (can be changed via GUI!)
+		constexpr float s_warningCriticalVoltage = 2.9;                 // If battery-voltage is <= this value, assume battery near-empty. Set to 0V to disable.
+		constexpr float s_voltageIndicatorLow = 2.9;                    // Lower range for Neopixel-voltage-indication (0 leds) (can be changed via GUI!)
+		constexpr float s_voltageIndicatorHigh = 3.3;                   // Upper range for Neopixel-voltage-indication (all leds) (can be changed via GUI!)
 	#endif
 
 	#ifdef MEASURE_BATTERY_MAX17055
