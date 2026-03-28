@@ -115,6 +115,7 @@ void Audio_InfoCallback(Audio::msg_t m) {
 		case Audio::evt_eof: { // end of file
 			Log_Printf(LOGLEVEL_INFO, "end of file:  %s", m.msg);
 			gPlayProperties.trackFinished = true;
+			gPlayProperties.currentSpeechActive = false;
 			break;
 		}
 		case Audio::evt_bitrate: {
@@ -458,7 +459,7 @@ void Audio_setTitle(const char *format, ...) {
 	// notify web ui and mqtt
 	Web_SendWebsocketData(0, WebsocketCodeType::TrackInfo);
 #ifdef MQTT_ENABLE
-	publishMqtt(topicTrackState, gPlayProperties.title, false);
+	publishMqtt(topicTrack, gPlayProperties.title, false);
 #endif
 }
 
@@ -578,8 +579,9 @@ void AudioPlayer_Loop() {
 			gPlayProperties.trackFinished = false;
 			gPlayProperties.playlistFinished = false;
 #ifdef MQTT_ENABLE
-			publishMqtt(topicPlaymodeState, static_cast<uint32_t>(gPlayProperties.playMode), false);
-			publishMqtt(topicRepeatModeState, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
+			publishMqtt(topicPausePlay, "play", false);
+			publishMqtt(topicPlaymode, static_cast<uint32_t>(gPlayProperties.playMode), false);
+			publishMqtt(topicRepeatMode, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
 #endif
 
 			// If we're in audiobook-mode and apply a modification-card, we don't
@@ -634,6 +636,9 @@ void AudioPlayer_Loop() {
 				gPlayProperties.playMode = NO_PLAYLIST;
 				Audio_setTitle(noPlaylist);
 				AudioPlayer_ClearCover();
+#ifdef MQTT_ENABLE
+				publishMqtt(topicPausePlay, "idle", false);
+#endif
 				return;
 
 			case PAUSEPLAY:
@@ -641,14 +646,21 @@ void AudioPlayer_Loop() {
 				audio->pauseResume();
 				if (gPlayProperties.pausePlay) {
 					Log_Println(cmndResumeFromPause, LOGLEVEL_INFO);
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "play", false);
+#endif
 				} else {
 					Log_Println(cmndPause, LOGLEVEL_INFO);
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "pause", false);
+#endif
 				}
 				if (gPlayProperties.saveLastPlayPosition && !gPlayProperties.pausePlay) {
 					Log_Printf(LOGLEVEL_INFO, trackPausedAtPos, audio->getAudioCurrentTime(), audio->getAudioFileDuration());
 					AudioPlayer_NvsRfidWriteWrapper(gPlayProperties.playRfidTag, audio->getAudioCurrentTime(), gPlayProperties.playMode, gPlayProperties.currentTrackNumber);
 				}
 				gPlayProperties.pausePlay = !gPlayProperties.pausePlay;
+
 				Web_SendWebsocketData(0, WebsocketCodeType::TrackInfo);
 				return;
 
@@ -657,11 +669,14 @@ void AudioPlayer_Loop() {
 				if (gPlayProperties.pausePlay) {
 					audio->pauseResume();
 					gPlayProperties.pausePlay = false;
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "play", false);
+#endif
 				}
 				if (gPlayProperties.repeatCurrentTrack) { // End loop if button was pressed
 					gPlayProperties.repeatCurrentTrack = false;
 #ifdef MQTT_ENABLE
-					publishMqtt(topicRepeatModeState, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
+					publishMqtt(topicRepeatMode, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
 #endif
 				}
 				// Allow next track if current track played in playlist isn't the last track.
@@ -692,11 +707,14 @@ void AudioPlayer_Loop() {
 				if (gPlayProperties.pausePlay) {
 					audio->pauseResume();
 					gPlayProperties.pausePlay = false;
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "play", false);
+#endif
 				}
 				if (gPlayProperties.repeatCurrentTrack) { // End loop if button was pressed
 					gPlayProperties.repeatCurrentTrack = false;
 #ifdef MQTT_ENABLE
-					publishMqtt(topicRepeatModeState, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
+					publishMqtt(topicRepeatMode, static_cast<uint32_t>(AudioPlayer_GetRepeatMode()), false);
 #endif
 				}
 				if (gPlayProperties.playMode == WEBSTREAM) {
@@ -753,6 +771,9 @@ void AudioPlayer_Loop() {
 				if (gPlayProperties.pausePlay) {
 					audio->pauseResume();
 					gPlayProperties.pausePlay = false;
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "play", false);
+#endif
 				}
 				gPlayProperties.currentTrackNumber = 0;
 				if (gPlayProperties.saveLastPlayPosition) {
@@ -770,6 +791,9 @@ void AudioPlayer_Loop() {
 				if (gPlayProperties.pausePlay) {
 					audio->pauseResume();
 					gPlayProperties.pausePlay = false;
+#ifdef MQTT_ENABLE
+					publishMqtt(topicPausePlay, "play", false);
+#endif
 				}
 				if (gPlayProperties.currentTrackNumber + 1 < gPlayProperties.playlist->size()) {
 					gPlayProperties.currentTrackNumber = gPlayProperties.playlist->size() - 1;
@@ -860,7 +884,7 @@ void AudioPlayer_Loop() {
 				Audio_setTitle(noPlaylist);
 				AudioPlayer_ClearCover();
 #ifdef MQTT_ENABLE
-				publishMqtt(topicPlaymodeState, static_cast<uint32_t>(gPlayProperties.playMode), false);
+				publishMqtt(topicPlaymode, static_cast<uint32_t>(gPlayProperties.playMode), false);
 #endif
 				gPlayProperties.currentTrackNumber = 0;
 				if (gPlayProperties.sleepAfterPlaylist) {
@@ -1106,7 +1130,7 @@ void AudioPlayer_SetVolume(const int32_t _newVolume, bool reAdjustRotary) {
 		audio->setVolume(_volume, gPrefsSettings.getUChar("volumeCurve", 0));
 		Web_SendWebsocketData(0, WebsocketCodeType::Volume);
 #ifdef MQTT_ENABLE
-		publishMqtt(topicLoudnessState, static_cast<uint32_t>(_volume), false);
+		publishMqtt(topicLoudness, static_cast<uint32_t>(_volume), false);
 #endif
 		AudioPlayer_PauseOnMinVolume(_volumeBuf, _newVolume);
 	}
@@ -1460,7 +1484,7 @@ void AudioPlayer_ClearCover(void) {
 	// websocket and mqtt notify cover image has changed
 	Web_SendWebsocketData(0, WebsocketCodeType::CoverImg);
 #ifdef MQTT_ENABLE
-	publishMqtt(topicCoverChangedState, "", false);
+	publishMqtt(topicCoverChanged, "", false);
 #endif
 }
 
@@ -1472,7 +1496,7 @@ void audio_id3image(File &file, const size_t pos, const size_t size) {
 	// websocket and mqtt notify cover image has changed
 	Web_SendWebsocketData(0, WebsocketCodeType::CoverImg);
 #ifdef MQTT_ENABLE
-	publishMqtt(topicCoverChangedState, "", false);
+	publishMqtt(topicCoverChanged, "", false);
 #endif
 }
 
@@ -1535,12 +1559,8 @@ void audio_oggimage(File &file, std::vector<uint32_t> v) {
 	// websocket and mqtt notify cover image has changed
 	Web_SendWebsocketData(0, WebsocketCodeType::CoverImg);
 #ifdef MQTT_ENABLE
-	publishMqtt(topicCoverChangedState, "", false);
+	publishMqtt(topicCoverChanged, "", false);
 #endif
-}
-
-void audio_eof_speech(const char *info) {
-	gPlayProperties.currentSpeechActive = false;
 }
 
 // record audiodata or send via BT

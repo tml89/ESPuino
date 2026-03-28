@@ -2,6 +2,14 @@
 
 ## DEV-branch
 
+* 08.01.2026: More flexible MQTT-handling and new MQTT naming scheme (#373)
+
+## Version 2.5 (01.01.2026)
+
+* 01.01.2026: Add bluetooth source connection handling and flushing (#384)
+* 01.01.2026: Refactor button handling logic (#387)
+* 01.01.2026: Refactor shutdown button logic for clarity (#385)
+* 01.01.2026: Simplify channel to bit mapping in Port_ChannelToBit (#386)
 * 09.12.2025: Web UI: Allow escape from Bluetooth mode
 * 07.12.2025: WiFi / Bluetooth coexistence
 * 30.11.2025: Allocate playlist, tasklist in PSRAM if available
